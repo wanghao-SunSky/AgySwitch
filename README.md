@@ -10,13 +10,23 @@
 
 ## 下载安装 · Download（macOS 14+ · Apple Silicon）
 
+### 方式一：终端一键安装（推荐，免 Gatekeeper 弹窗）
+
+通过 `curl` 直接从 GitHub Releases 下载并校验 SHA-256 后安装到 `/Applications/AgySwitch.app`，不触发浏览器隔离标记，装完自动在顶部菜单栏启动：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wanghao-SunSky/AgySwitch/main/scripts/install.sh | bash
+```
+
+> 可查看完整安装脚本源码：[scripts/install.sh](scripts/install.sh)。如需安装到用户目录，可前缀 `AGYSWITCH_INSTALL_DIR="$HOME/Applications"`。
+
+### 方式二：手动下载安装包
+
 - 📦 [**下载 DMG 安装包（1.5 MB）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.1.0/AgySwitch-v0.1.0-macos-arm64.dmg)
 - 🗂️ [**下载 ZIP 压缩包（1.2 MB）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.1.0/AgySwitch-v0.1.0-macos-arm64.zip)
 - 🔗 [**Releases 页面（含 SHA-256 校验值）**](https://github.com/wanghao-SunSky/AgySwitch/releases/latest)
 
-### 首次打开说明（Gatekeeper 放行）
-
-因未购买 Apple 付费开发者证书、采用本地 ad-hoc 签名，首次将 `AgySwitch.app` 拖入 `/Applications` 打开时，若 macOS 提示「已损坏」或「无法验证开发者」，在终端运行一行命令即可正常启动：
+**手动下载首次打开说明**：因未购买 Apple 付费开发者证书、采用本地 ad-hoc 签名，通过浏览器手动下载后拖入 `/Applications` 打开时，若 macOS 提示「已损坏」或「无法验证开发者」，运行一行命令移除浏览器隔离属性即可：
 
 ```bash
 xattr -cr /Applications/AgySwitch.app
