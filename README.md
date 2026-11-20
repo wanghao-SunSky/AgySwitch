@@ -20,7 +20,20 @@ curl -fsSL https://raw.githubusercontent.com/wanghao-SunSky/AgySwitch/main/scrip
 
 > Inspect the installer source at [`scripts/install.sh`](scripts/install.sh). To install into your user Applications folder instead, prefix with `AGYSWITCH_INSTALL_DIR="$HOME/Applications"`.
 
-### Option 2: Manual Download
+### Option 2: Let Your AI Audit & Build Locally (Zero-Trust · No Gatekeeper Prompt)
+
+Since AgySwitch reads and writes macOS Keychain credentials and uses local ad-hoc signing, you don't have to take prebuilt binaries on faith. Copy and paste this prompt into **Claude Code, Codex, Antigravity (`agy`), or Cursor** to have your own AI agent audit every source file first, report back to you, and build `AgySwitch.app` locally from source once you approve (locally compiled builds carry no browser quarantine attributes and trigger zero Gatekeeper prompts):
+
+```text
+Clone https://github.com/wanghao-SunSky/AgySwitch.git to /tmp/AgySwitch and perform a full security audit of every file under Sources/ and scripts/ before building anything:
+1. Verify zero network activity: confirm all code under Sources/, scripts/build_app.sh, and scripts/generate_icon.swift makes no network requests (no URLSession, NWConnection, sockets, or outbound calls; only scripts/install.sh downloads releases from this GitHub repo) and Package.swift has zero third-party dependencies.
+2. Verify Keychain & file boundaries: confirm it only reads/writes the macOS login Keychain entries for "gemini" / "antigravity" and "agy-acct-vault" via `/usr/bin/security -i` stdin pipes, never writes plaintext tokens to disk (only non-sensitive metadata in ~/.config/agy-acct/registry.json), and never modifies agy's settings.json, MCP configs, skills, or history.
+3. Verify passive log monitoring: confirm the quota watcher only tails `~/.gemini/antigravity-cli/log/cli-*.log` in read-only mode.
+
+Present a concise security audit report with file and line references and wait for my confirmation. Once I approve, run `swift test`, then run `./scripts/build_app.sh --install` to compile and install `/Applications/AgySwitch.app` from source, and launch it with `open -a /Applications/AgySwitch.app`.
+```
+
+### Option 3: Manual Download
 
 - 📦 [**Download DMG Installer (`AgySwitch-v0.2.0-macos-arm64.dmg`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.0/AgySwitch-v0.2.0-macos-arm64.dmg)
 - 🗂️ [**Download ZIP Archive (`AgySwitch-v0.2.0-macos-arm64.zip`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.0/AgySwitch-v0.2.0-macos-arm64.zip)

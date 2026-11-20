@@ -20,7 +20,20 @@ curl -fsSL https://raw.githubusercontent.com/wanghao-SunSky/AgySwitch/main/scrip
 
 > 可查看完整安装脚本源码：[`scripts/install.sh`](scripts/install.sh)。如需安装到当前用户目录，可在命令前加 `AGYSWITCH_INSTALL_DIR="$HOME/Applications"`。
 
-### 方式二：手动下载安装包
+### 方式二：让你的 AI 先审源码再本机编译安装（零信任 · 免 Gatekeeper 弹窗）
+
+由于 AgySwitch 涉及 macOS Keychain 凭证读写且采用本地 ad-hoc 签名，如果你不想盲信陌生仓库或预编译包、也懒得自己逐行审代码，可以直接复制下方 Prompt 发给 **Claude Code、Codex、Antigravity（`agy`）或 Cursor**，让你的 AI 先逐文件完成安全审计并向你汇报结论，确认无虞后再从本机源码编译安装（本机编译天生无浏览器 quarantine 标记，完全不触发 Gatekeeper 拦截）：
+
+```text
+请先把 https://github.com/wanghao-SunSky/AgySwitch.git 克隆到 /tmp/AgySwitch，在执行任何编译或安装前，逐文件审计 Sources/ 和 scripts/ 下的全部代码：
+1. 核实零网络请求：确认 Sources/ 全部应用源码以及 scripts/build_app.sh、scripts/generate_icon.swift 没有任何联网或外传数据行为（无 URLSession、NWConnection、Socket 或外部调用；仅 scripts/install.sh 用于从本仓库 Releases 下载安装包），且 Package.swift 零第三方依赖。
+2. 核实 Keychain 与文件边界：确认只读写 macOS login Keychain 中的 `gemini / antigravity` 与 `agy-acct-vault` 条目，敏感写入均通过 `/usr/bin/security -i` 标准输入管道传参，不落盘任何明文 Token（`~/.config/agy-acct/registry.json` 仅存别名、邮箱和冷却时间），且绝不修改 `agy` 的 `settings.json`、MCP、Skills 或对话历史。
+3. 核实日志监听只读：确认本地额度监听器仅对 `~/.gemini/antigravity-cli/log/cli-*.log` 做只读监听。
+
+请先向我输出一份简明的安全审计报告（附关键文件与行号）并等待我确认；待我确认安全后，再运行 `swift test` 验证测试通过，随后执行 `./scripts/build_app.sh --install` 从本机源码编译打包安装到 `/Applications/AgySwitch.app`，并用 `open -a /Applications/AgySwitch.app` 启动。
+```
+
+### 方式三：手动下载安装包
 
 - 📦 [**下载 DMG 安装包（`AgySwitch-v0.2.0-macos-arm64.dmg`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.0/AgySwitch-v0.2.0-macos-arm64.dmg)
 - 🗂️ [**下载 ZIP 压缩包（`AgySwitch-v0.2.0-macos-arm64.zip`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.0/AgySwitch-v0.2.0-macos-arm64.zip)
