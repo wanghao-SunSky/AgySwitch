@@ -13,15 +13,20 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     private let popover = NSPopover()
     private var statusItem: NSStatusItem?
     private var feedbackExpiry: DispatchWorkItem?
+    private var language: DisplayLanguage { model.displayLanguage }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        preferences.register(defaults: ["autoWatchEnabled": false, "defaultCooldownSeconds": 18_000])
+        preferences.register(defaults: ["autoWatchEnabled": false, "defaultCooldownSeconds": 18_000,
+                                        AppLanguage.preferenceKey: AppLanguage.system.rawValue])
+        model.language = preferences.string(forKey: AppLanguage.preferenceKey).flatMap(AppLanguage.init(rawValue:)) ?? .system
         model.automatic = preferences.bool(forKey: "autoWatchEnabled")
         let cooldown = preferences.integer(forKey: "defaultCooldownSeconds")
         if [18_000, 10_800, 3_600].contains(cooldown) { model.cooldown = cooldown }
         model.opensAtLogin = (try? loginItem.enabled()) ?? false
         model.send = { [weak self] in self?.handle($0) }
         work.onUpdate = { [weak self] in self?.watcherUpdated($0) }
+        NotificationCenter.default.addObserver(self, selector: #selector(systemLocaleChanged),
+                                               name: NSLocale.currentLocaleDidChangeNotification, object: nil)
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
@@ -49,6 +54,11 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         reload()
     }
 
+    @objc private func systemLocaleChanged() {
+        model.refreshDisplayLanguage()
+        updateTooltip()
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         work.finish { sender.reply(toApplicationShouldTerminate: true) }
         return .terminateLater
@@ -71,11 +81,10 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         case .refresh: reload(showFeedback: true)
         case .inspect:
             run { try $0.inspect(logDirectory: LocalWork.logDirectory) } message: { result in
-                let login = result.hasLogin ? "当前登录可读" : "当前未登录"
-                let logs = result.logsReadable ? "日志可读" : "日志目录缺失或不可读"
-                let vault = result.invalidVaultCount == 0 ? "快照检查通过" : "\(result.invalidVaultCount) 个快照异常"
                 return MenuFeedback(result.invalidVaultCount == 0 ? .info : .warning,
-                                    "\(login) · \(result.accountCount) 个账号", detail: "\(logs) · \(vault)")
+                                    .statusTitle(signedIn: result.hasLogin, accountCount: result.accountCount),
+                                    detail: .statusDetail(logsReadable: result.logsReadable,
+                                                          invalidVaultCount: result.invalidVaultCount))
             }
         case .openLogs:
             var isDirectory: ObjCBool = false
@@ -83,31 +92,31 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
                isDirectory.boolValue {
                 NSWorkspace.shared.open(LocalWork.logDirectory)
             } else {
-                show(MenuFeedback(.warning, "日志目录尚未创建", detail: "运行 agy 后可在这里打开。"))
+                show(MenuFeedback(.warning, .logsMissing, detail: .logsMissingHint))
             }
         case .toggleLoginItem:
             do {
                 model.opensAtLogin = try loginItem.toggle()
-                show(MenuFeedback(.success, model.opensAtLogin ? "下次登录时启动" : "已关闭登录时启动"))
+                show(MenuFeedback(.success, model.opensAtLogin ? .loginItemEnabled : .loginItemDisabled))
             } catch {
-                show(MenuFeedback(.warning, "无法更新登录时启动设置"))
+                show(MenuFeedback(.warning, .loginItemFailed))
             }
         case .quit:
             NSApp.terminate(nil)
         case let .save(alias, email):
-            run { try $0.save(alias: alias, expectedEmail: email) } message: { MenuFeedback(.success, "已保存 " + $0.alias) }
+            run { try $0.save(alias: alias, expectedEmail: email) } message: { MenuFeedback(.success, .saved($0.alias)) }
         case let .select(id):
             run(mutatingLogin: true, { try $0.switchTo(accountID: id) }, message: switchFeedback)
         case .next:
             run(mutatingLogin: true, { try $0.next() }, message: switchFeedback)
         case let .rename(id, alias):
-            run { try $0.rename(accountID: id, alias: alias) } message: { _ in MenuFeedback(.success, "别名已更新") }
+            run { try $0.rename(accountID: id, alias: alias) } message: { _ in MenuFeedback(.success, .aliasUpdated) }
         case let .remove(id):
-            run { try $0.remove(accountID: id) } message: { _ in MenuFeedback(.success, "已移除账号") }
+            run { try $0.remove(accountID: id) } message: { _ in MenuFeedback(.success, .accountRemoved) }
         case let .cooldown(id, mark):
             let seconds = mark ? Double(model.cooldown) : nil
             run { try $0.cooldown(accountID: id, seconds: seconds) } message: { _ in
-                MenuFeedback(.success, mark ? "已标记冷却" : "已清除冷却")
+                MenuFeedback(.success, mark ? .cooldownMarked : .cooldownCleared)
             }
         case let .setAutomatic(enabled):
             model.automatic = enabled
@@ -120,6 +129,10 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             model.cooldown = seconds
             preferences.set(seconds, forKey: "defaultCooldownSeconds")
             work.configure(automatic: model.automatic, cooldown: seconds)
+        case let .setLanguage(language):
+            model.language = language
+            preferences.set(language.rawValue, forKey: AppLanguage.preferenceKey)
+            updateTooltip()
         }
     }
 
@@ -132,16 +145,17 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             if result.changed { notify(alias: result.target) }
             show(switchFeedback(result))
             reload()
-        case let .warning(message):
-            if model.automatic { show(MenuFeedback(.warning, message)) }
+        case let .warning(error):
+            if model.automatic { show(MenuFeedback(.warning, error.text)) }
             reload()
         }
     }
 
     private func updateTooltip() {
         let current = model.pool.registry.accounts.first { $0.accountID == model.pool.activeID }?.alias
-            ?? model.pool.currentEmail ?? "未登录"
-        statusItem?.button?.toolTip = "AgySwitch · \(current)\(model.listening ? " · 监听中" : "")"
+            ?? model.pool.currentEmail ?? language[.signedOut]
+        let monitoring = model.listening ? [language[.monitoring]] : []
+        statusItem?.button?.toolTip = (["AgySwitch", current] + monitoring).joined(separator: " · ")
     }
 
     private func reload(showFeedback: Bool = false) {
@@ -154,9 +168,9 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             case let .success(snapshot):
                 model.pool = snapshot
                 updateTooltip()
-                if showFeedback { show(MenuFeedback(.success, "账号池已刷新")) }
+                if showFeedback { show(MenuFeedback(.success, .poolRefreshed)) }
             case let .failure(error):
-                show(MenuFeedback(.warning, safeMessage(error)))
+                show(MenuFeedback(.warning, AppError(redacting: error).text))
             }
         }
     }
@@ -174,14 +188,13 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             }
             switch result {
             case let .success(value): show(message(value))
-            case let .failure(error): show(MenuFeedback(.warning, safeMessage(error)))
+            case let .failure(error): show(MenuFeedback(.warning, AppError(redacting: error).text))
             }
         }
     }
 
     private func switchFeedback(_ outcome: SwitchOutcome) -> MenuFeedback {
-        if !outcome.changed { return MenuFeedback(.info, "正在使用 " + outcome.target) }
-        return MenuFeedback(.success, "已切至 " + outcome.target, detail: "新开或重启 agy / T3 会话生效")
+        MenuFeedback.switchResult(target: outcome.target, changed: outcome.changed)
     }
 
     private func show(_ feedback: MenuFeedback) {
@@ -193,25 +206,27 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func notify(alias: String) {
+        let title = LocalizedText.switched(alias).localized(in: language)
+        let body = language[.reopenSession]
         let content = UNMutableNotificationContent()
-        content.title = "AgySwitch 已切至 " + alias
-        content.body = "新开或重启 agy / T3 会话生效。"
+        content.title = title
+        content.body = body
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
             guard error != nil else { return }
-            Self.fallbackNotify(alias: alias)
+            Self.fallbackNotify(title: title, body: body)
         }
     }
 
-    nonisolated private static func fallbackNotify(alias: String) {
+    nonisolated private static func fallbackNotify(title: String, body: String) {
         let script = """
         on run argv
-        display notification ("已切至 " & (item 1 of argv) & "，新开或重启 agy / T3 会话生效。") with title "AgySwitch"
+        display notification (item 2 of argv) with title "AgySwitch" subtitle (item 1 of argv)
         end run
         """
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script, alias]
+        process.arguments = ["-e", script, title, body]
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

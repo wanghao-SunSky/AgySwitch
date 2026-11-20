@@ -1,13 +1,5 @@
 import Foundation
 
-public struct AppError: LocalizedError {
-    public let message: String
-
-    // Call sites supply fixed text, never values from a log or credential.
-    init(_ message: String) { self.message = message }
-    public var errorDescription: String? { message }
-}
-
 public struct Identity: Equatable {
     public let email: String
     public let authMethod: String
@@ -36,7 +28,7 @@ public struct Identity: Equatable {
         return Identity(email: email, authMethod: method)
     }
 
-    private static let invalid = AppError("agy 凭证格式或字段无效。")
+    private static let invalid = AppError.invalidCredential
 }
 
 extension Data {
@@ -185,7 +177,7 @@ public struct Registry: Codable, Equatable {
         init?(intValue: Int) { return nil }
     }
 
-    static let invalid = AppError("registry.json 格式无效，请检查账号池元数据。")
+    static let invalid = AppError.invalidRegistry
 
     public init(from decoder: Decoder) throws {
         let all = try decoder.container(keyedBy: AnyKey.self)

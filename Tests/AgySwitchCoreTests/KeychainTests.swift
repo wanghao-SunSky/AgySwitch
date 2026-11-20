@@ -82,7 +82,9 @@ final class KeychainTests: XCTestCase {
             { _ = try Identity.parse(raw) }
         ] {
             XCTAssertThrowsError(try action()) { error in
-                XCTAssertFalse(error.localizedDescription.contains(secret))
+                for language in DisplayLanguage.allCases {
+                    XCTAssertFalse(AppError(redacting: error).text.localized(in: language).contains(secret))
+                }
             }
         }
         XCTAssertThrowsError(try keychain.delete(service: "gemini", account: "antigravity"))

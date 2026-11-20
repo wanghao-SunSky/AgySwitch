@@ -7,19 +7,29 @@ public enum MenuAction {
     case select(String), next, rename(id: String, alias: String), remove(String)
     case cooldown(id: String, mark: Bool)
     case setAutomatic(Bool), setDefaultCooldown(Int)
+    case setLanguage(AppLanguage)
 }
 
 public struct MenuFeedback: Equatable {
     public enum Kind { case success, info, warning }
 
     public let kind: Kind
-    public let title: String
-    public let detail: String?
+    public let title: LocalizedText
+    public let detail: LocalizedText?
 
-    public init(_ kind: Kind, _ title: String, detail: String? = nil) {
+    public init(_ kind: Kind, _ title: LocalizedText, detail: LocalizedText? = nil) {
         self.kind = kind
         self.title = title
         self.detail = detail
+    }
+
+    public init(_ kind: Kind, _ title: AppLabel, detail: AppLabel? = nil) {
+        self.init(kind, title.text, detail: detail?.text)
+    }
+
+    public static func switchResult(target: String, changed: Bool) -> Self {
+        if changed { return Self(.success, .switched(target), detail: AppLabel.reopenSession.text) }
+        return Self(.info, .alreadyUsing(target))
     }
 
     var icon: String {
@@ -39,17 +49,29 @@ public final class MenuModel: ObservableObject {
     @Published public var opensAtLogin: Bool
     @Published public var feedback: MenuFeedback?
     @Published public var busy = false
+    @Published public var language: AppLanguage {
+        didSet { refreshDisplayLanguage() }
+    }
+    @Published public private(set) var displayLanguage: DisplayLanguage
 
     public var send: (MenuAction) -> Void = { _ in }
 
     public init(pool: PoolSnapshot = PoolSnapshot(), automatic: Bool = false, listening: Bool = false,
-                cooldown: Int = 18_000, opensAtLogin: Bool = false, feedback: MenuFeedback? = nil) {
+                cooldown: Int = 18_000, opensAtLogin: Bool = false, feedback: MenuFeedback? = nil,
+                language: AppLanguage = .system) {
         self.pool = pool
         self.automatic = automatic
         self.listening = listening
         self.cooldown = cooldown
         self.opensAtLogin = opensAtLogin
         self.feedback = feedback
+        self.language = language
+        displayLanguage = language.resolved()
+    }
+
+    public func refreshDisplayLanguage() {
+        let resolved = language.resolved()
+        if displayLanguage != resolved { displayLanguage = resolved }
     }
 }
 
@@ -75,17 +97,17 @@ public struct MenuPopoverView: View {
     private enum Editor: Equatable {
         case save(String), rename(String)
 
-        var buttonTitle: String {
+        var buttonTitle: AppLabel {
             switch self {
-            case .save: return "保存"
-            case .rename: return "更名"
+            case .save: return .save
+            case .rename: return .rename
             }
         }
 
-        var placeholder: String {
+        var placeholder: AppLabel {
             switch self {
-            case .save: return "账号别名"
-            case .rename: return "新别名"
+            case .save: return .aliasPlaceholder
+            case .rename: return .newAliasPlaceholder
             }
         }
     }
@@ -106,6 +128,7 @@ public struct MenuPopoverView: View {
 
     private var activeID: String? { previewActiveID ?? model.pool.activeID }
     private var accounts: [Account] { model.pool.registry.accounts }
+    private var language: DisplayLanguage { model.displayLanguage }
     private var availableToSave: String? {
         model.pool.activeID == nil ? model.pool.currentEmail : nil
     }
@@ -148,13 +171,14 @@ public struct MenuPopoverView: View {
                 break
             }
         }
-        .alert("移除账号？", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }),
+        .alert(language[.confirmRemove], isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }),
                presenting: removal) { account in
-            Button("取消", role: .cancel) { removal = nil }
-            Button("移除", role: .destructive) { model.send(.remove(account.id)); removal = nil }
+            Button(language[.cancel], role: .cancel) { removal = nil }
+            Button(language[.remove], role: .destructive) { model.send(.remove(account.id)); removal = nil }
         } message: { account in
-            Text("将移除 \(account.alias) 的账号记录与凭证快照。")
+            Text(LocalizedText.removeConfirmation(account.alias).localized(in: language))
         }
+        .environment(\.locale, Locale(identifier: language.rawValue))
     }
 
     private var header: some View {
@@ -169,8 +193,8 @@ public struct MenuPopoverView: View {
             Circle()
                 .fill(model.listening ? Color.green : Color.secondary.opacity(0.38))
                 .frame(width: 5, height: 5)
-                .help(model.listening ? "正在监听本地日志" : "日志监听已关闭或暂未连接")
-                .accessibilityLabel(model.listening ? "正在监听本地日志" : "日志监听未运行")
+                .help(language[model.listening ? .listening : .listenerUnavailable])
+                .accessibilityLabel(language[model.listening ? .listening : .listenerStopped])
             Spacer()
             Button { model.send(.refresh) } label: {
                 Image(systemName: "arrow.clockwise")
@@ -178,14 +202,25 @@ public struct MenuPopoverView: View {
             }
             .buttonStyle(QuietIconStyle())
             .disabled(model.busy)
-            .accessibilityLabel("刷新")
-            .help("重读账号池与钥匙串")
+            .accessibilityLabel(language[.refresh])
+            .help(language[.refreshHelp])
             Menu {
-                Button(model.opensAtLogin ? "关闭登录时启动" : "登录时启动") { model.send(.toggleLoginItem) }
-                Button("打开日志目录") { model.send(.openLogs) }
-                Button("检查状态") { model.send(.inspect) }
+                Menu(language[.language]) {
+                    Picker(language[.language], selection: Binding(get: { model.language },
+                                                                  set: { model.send(.setLanguage($0)) })) {
+                        ForEach(AppLanguage.allCases, id: \.self) { option in
+                            Text(option.menuTitle(in: language)).tag(option)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
                 Divider()
-                Button("退出 AgySwitch") { model.send(.quit) }
+                Button(language[model.opensAtLogin ? .disableLoginItem : .enableLoginItem]) { model.send(.toggleLoginItem) }
+                Button(language[.openLogs]) { model.send(.openLogs) }
+                Button(language[.inspect]) { model.send(.inspect) }
+                Divider()
+                Button(language[.quit]) { model.send(.quit) }
                     .keyboardShortcut("q")
             } label: {
                 Image(systemName: "ellipsis")
@@ -195,8 +230,8 @@ public struct MenuPopoverView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .accessibilityLabel("更多")
-            .help("更多操作")
+            .accessibilityLabel(language[.more])
+            .help(language[.moreHelp])
         }
         .padding(.leading, 3)
         .frame(height: 26)
@@ -215,12 +250,14 @@ public struct MenuPopoverView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("当前账号未纳管").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                    Text(language[.unsavedAccount])
+                        .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                        .fixedSize()
                     Text(email).font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
                 }
                 Spacer(minLength: 2)
                 if editor != .save(email) {
-                    Button("保存") { begin(.save(email), value: model.pool.suggestedAlias) }
+                    Button(language[.save]) { begin(.save(email), value: model.pool.suggestedAlias) }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .fixedSize()
@@ -240,8 +277,8 @@ public struct MenuPopoverView: View {
                 HStack(spacing: 9) {
                     Image(systemName: "person.2").font(.system(size: 15)).foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("还没有账号").font(.system(size: 12, weight: .medium))
-                        Text("登录 agy 后，可在这里保存当前账号。")
+                        Text(language[.noAccounts]).font(.system(size: 12, weight: .medium))
+                        Text(language[.noAccountsHint])
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }
@@ -259,7 +296,7 @@ public struct MenuPopoverView: View {
     private var rows: some View {
         VStack(spacing: 2) {
             ForEach(accounts) { account in
-                AccountRow(account: account, active: activeID == account.id, date: referenceDate,
+                AccountRow(account: account, active: activeID == account.id, date: referenceDate, language: language,
                            busy: model.busy, select: { model.send(.select(account.id)) },
                            cooldown: { model.send(.cooldown(id: account.id, mark: $0)) },
                            rename: { begin(.rename(account.id), value: account.alias) },
@@ -276,19 +313,20 @@ public struct MenuPopoverView: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 8) {
-                Text("额度耗尽自动切换")
+                Text(language[.autoSwitch])
                     .font(.system(size: 12.5, weight: .regular))
                     .fixedSize()
                 Spacer(minLength: 4)
                 Menu {
                     ForEach([18_000, 10_800, 3_600], id: \.self) { seconds in
+                        let duration = LocalizedText.hours(seconds / 3600).localized(in: language)
                         Button {
                             model.send(.setDefaultCooldown(seconds))
                         } label: {
                             if model.cooldown == seconds {
-                                Label("\(seconds / 3600) 小时", systemImage: "checkmark")
+                                Label(duration, systemImage: "checkmark")
                             } else {
-                                Text("\(seconds / 3600) 小时")
+                                Text(duration)
                             }
                         }
                     }
@@ -306,16 +344,17 @@ public struct MenuPopoverView: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .accessibilityLabel("默认冷却时长")
-                .help("日志没有重置时间时使用此冷却时长")
+                .accessibilityLabel(language[.defaultCooldown])
+                .accessibilityValue(LocalizedText.hours(model.cooldown / 3600).localized(in: language))
+                .help(language[.defaultCooldownHelp])
 
                 Toggle("", isOn: Binding(get: { model.automatic }, set: { model.send(.setAutomatic($0)) }))
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .tint(.accentColor)
                     .controlSize(.mini)
-                    .accessibilityLabel("额度耗尽自动切换")
-                    .help("读取本机 agy 日志，跳过冷却中的账号")
+                    .accessibilityLabel(language[.autoSwitch])
+                    .help(language[.autoSwitchHelp])
             }
             .padding(.horizontal, 3)
 
@@ -323,11 +362,12 @@ public struct MenuPopoverView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .font(.system(size: 11, weight: .semibold))
-                    Text("切到下一个可用账号")
+                    Text(language[.switchNext])
                         .font(.system(size: 12, weight: .medium))
+                        .fixedSize()
                     Spacer(minLength: 4)
                     if model.busy {
-                        ProgressView().controlSize(.mini).accessibilityLabel("正在访问账号池")
+                        ProgressView().controlSize(.mini).accessibilityLabel(language[.loadingPool])
                     } else {
                         Text("⌘↩")
                             .font(.system(size: 10.5, weight: .medium))
@@ -348,8 +388,8 @@ public struct MenuPopoverView: View {
                         .foregroundStyle(feedback.kind == .success ? Color.accentColor : Color.secondary)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(feedback.title).fontWeight(.medium)
-                        if let detail = feedback.detail { Text(detail).foregroundStyle(.secondary) }
+                        Text(feedback.title.localized(in: language)).fontWeight(.medium)
+                        if let detail = feedback.detail { Text(detail.localized(in: language)).foregroundStyle(.secondary) }
                     }
                 }
                 .font(.system(size: 11))
@@ -364,20 +404,20 @@ public struct MenuPopoverView: View {
 
     private func aliasEditor(_ editing: Editor) -> some View {
         HStack(spacing: 6) {
-            TextField(editing.placeholder, text: $input)
+            TextField(language[editing.placeholder], text: $input)
                 .font(.system(size: 12))
                 .focused($focused)
                 .onAppear { focused = true }
                 .onSubmit { submit(editing) }
                 .onExitCommand { editor = nil }
-            Button(editing.buttonTitle) { submit(editing) }
+            Button(language[editing.buttonTitle]) { submit(editing) }
                 .controlSize(.small)
                 .disabled(input.isEmpty || model.busy)
             Button { editor = nil } label: {
                 Image(systemName: "xmark").frame(width: 18, height: 20)
             }
             .buttonStyle(QuietIconStyle())
-            .accessibilityLabel("取消编辑")
+            .accessibilityLabel(language[.cancelEdit])
         }
     }
 
@@ -460,6 +500,7 @@ private struct AccountRow: View {
     let account: Account
     let active: Bool
     let date: Date?
+    let language: DisplayLanguage
     let busy: Bool
     let select: () -> Void
     let cooldown: (Bool) -> Void
@@ -478,20 +519,21 @@ private struct AccountRow: View {
                     rowIdentity
                     Spacer(minLength: 1)
                     if active {
-                        Label("使用中", systemImage: "checkmark")
+                        Label(language[.active], systemImage: "checkmark")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(Color.accentColor)
                             .fixedSize()
                     } else if cooling, let until = account.cooldownUntil {
-                        Text(remaining(until - now))
+                        let remaining = LocalizedText.cooldownCountdown(until - now)
+                        Text(remaining.localized(in: language))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                             .font(.system(size: 10, weight: .medium))
-                            .accessibilityLabel("冷却剩余 " + remaining(until - now))
+                            .accessibilityLabel(LocalizedText.cooldownEndsIn(remaining).localized(in: language))
                             .fixedSize()
                         dot(.orange)
                     } else {
-                        dot(.green).accessibilityLabel("可用")
+                        dot(.green).accessibilityLabel(language[.available])
                     }
                 }
                 .padding(.horizontal, 10)
@@ -509,11 +551,11 @@ private struct AccountRow: View {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.13), value: hovered)
             .onHover { hovered = $0 }
             .contextMenu {
-                if account.cooldownUntil != nil { Button("清除冷却") { cooldown(false) } }
-                if !cooling { Button("标记冷却") { cooldown(true) } }
-                Button("重命名别名") { rename() }
+                if account.cooldownUntil != nil { Button(language[.clearCooldown]) { cooldown(false) } }
+                if !cooling { Button(language[.markCooldown]) { cooldown(true) } }
+                Button(language[.renameAlias]) { rename() }
                 Divider()
-                Button("移除账号", role: .destructive) { remove() }
+                Button(language[.removeAccount], role: .destructive) { remove() }
             }
         }
     }
@@ -534,13 +576,5 @@ private struct AccountRow: View {
 
     private func dot(_ color: Color) -> some View {
         Circle().fill(color).frame(width: 5, height: 5).padding(.trailing, 3)
-    }
-
-    private func remaining(_ seconds: Double) -> String {
-        let total = max(1, Int(ceil(seconds)))
-        if total < 60 { return "\(total)s" }
-        let minutes = total / 60
-        if minutes < 60 { return "\(minutes)m" }
-        return "\(minutes / 60)h \(minutes % 60)m"
     }
 }

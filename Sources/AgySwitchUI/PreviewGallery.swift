@@ -28,21 +28,25 @@ public enum PreviewGallery {
             Account(accountID: String(repeating: "c", count: 64), alias: "studio", email: "lin.studio@example.com",
                     cooldownUntil: time + 15_120, exhaustedReason: .resource)
         ]
-        for (name, currentEmail, feedback) in [
-            ("overview", "lin.new@example.com", MenuFeedback(.success, "已切至 backup", detail: "新开或重启 agy / T3 会话生效")),
+        let scenarios: [(String, String, MenuFeedback?)] = [
+            ("overview", "lin.new@example.com", .switchResult(target: "backup", changed: true)),
             ("managed", accounts[0].email, nil)
-        ] {
-            let model = MenuModel(pool: PoolSnapshot(registry: Registry(accounts: accounts), currentEmail: currentEmail),
-                                  automatic: true, listening: true, feedback: feedback)
+        ]
+        for (name, currentEmail, feedback) in scenarios {
+            let pool = PoolSnapshot(registry: Registry(accounts: accounts), currentEmail: currentEmail)
             for (variant, appearance, scheme) in [
                 ("light", NSAppearance.Name.aqua, ColorScheme.light),
                 ("dark", NSAppearance.Name.darkAqua, ColorScheme.dark)
             ] {
-                // The overview deliberately puts all three row states alongside the save prompt.
-                let view = MenuPopoverView(model: model, previewActiveID: name == "overview" ? accounts[0].id : nil,
-                                           referenceDate: date)
-                try render(view, appearance: appearance, scheme: scheme,
-                           to: directory.appendingPathComponent("\(name)-\(variant).png"))
+                for (language, suffix) in [(AppLanguage.zhHans, ""), (.en, "-en")] {
+                    let model = MenuModel(pool: pool, automatic: true, listening: true,
+                                          feedback: feedback, language: language)
+                    // The overview deliberately puts all three row states alongside the save prompt.
+                    let view = MenuPopoverView(model: model, previewActiveID: name == "overview" ? accounts[0].id : nil,
+                                               referenceDate: date)
+                    try render(view, appearance: appearance, scheme: scheme,
+                               to: directory.appendingPathComponent("\(name)\(suffix)-\(variant).png"))
+                }
             }
         }
     }

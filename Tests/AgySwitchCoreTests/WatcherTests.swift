@@ -130,8 +130,13 @@ final class WatcherTests: XCTestCase {
             let line = "E1120 19:00:00.1 429 client.go:25] HTTP 429 retry after 2h refresh_token=\(marker)\n"
             try put(line, at: logs.appendingPathComponent("cli-blocked.log"))
             XCTAssertThrowsError(try watcher.poll(cooldown: 1)) { error in
-                XCTAssertEqual(error.localizedDescription, "其余账号都在冷却，请等到期后再切换。")
-                XCTAssertFalse(error.localizedDescription.contains(marker))
+                let warning = AppError(redacting: error)
+                XCTAssertEqual(warning, .allOthersCooling)
+                XCTAssertEqual(warning.text.localized(in: .zhHans), "其余账号都在冷却，请等到期后再切换。")
+                XCTAssertEqual(warning.text.localized(in: .en), "All other accounts are on cooldown. Try again when one is available.")
+                for language in DisplayLanguage.allCases {
+                    XCTAssertFalse(warning.text.localized(in: language).contains(marker))
+                }
             }
             let snapshot = try pool.snapshot()
             XCTAssertEqual(snapshot.registry.accounts[0].cooldownUntil, clock.now + 7200)

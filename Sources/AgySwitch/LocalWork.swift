@@ -5,7 +5,7 @@ final class LocalWork {
     enum Update {
         case listening(Bool)
         case switched(SwitchOutcome)
-        case warning(String)
+        case warning(AppError)
     }
 
     static let logDirectory = FileManager.default.homeDirectoryForCurrentUser
@@ -16,7 +16,7 @@ final class LocalWork {
     private var timer: DispatchSourceTimer?
     private var cooldown: Int = 18_000
     private var retryAt: Double = 0
-    private var reportedWarning: String?
+    private var reportedWarning: AppError?
     var onUpdate: (Update) -> Void = { _ in }
 
     func perform<T>(mutatingLogin: Bool = false, _ action: @escaping (AccountPool) throws -> T,
@@ -96,17 +96,13 @@ final class LocalWork {
     }
 
     private func warn(_ error: Error) {
-        let message = safeMessage(error)
-        guard message != reportedWarning else { return }
-        reportedWarning = message
-        publish(.warning(message))
+        let warning = AppError(redacting: error)
+        guard warning != reportedWarning else { return }
+        reportedWarning = warning
+        publish(.warning(warning))
     }
 
     private func publish(_ update: Update) {
         DispatchQueue.main.async { [weak self] in self?.onUpdate(update) }
     }
-}
-
-func safeMessage(_ error: Error) -> String {
-    (error as? AppError)?.message ?? "本地操作失败，请检查访问权限后重试。"
 }

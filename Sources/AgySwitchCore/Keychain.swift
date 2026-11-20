@@ -19,7 +19,7 @@ public struct MacKeychain: Keychain {
     static let vaultService = "agy-acct-vault"
     static let executable = "/usr/bin/security"
     private static let notFound: Int32 = 44
-    private static let executionError = AppError("无法执行 security，或登录钥匙串响应超时。")
+    private static let executionError = AppError.keychainUnavailable
     private static let hexDetail = try! NSRegularExpression(pattern: #"^password: 0x([0-9A-Fa-f]+)(?: |$)"#,
                                                             options: .anchorsMatchLines)
     private static let textDetail = try! NSRegularExpression(pattern: #"^password: "([^\n]*)"$"#,
@@ -42,13 +42,13 @@ public struct MacKeychain: Keychain {
         let query = ["-s", service, "-a", account, path]
         let result = try execute(["find-generic-password", "-w"] + query)
         if result.status == Self.notFound { return nil }
-        guard result.status == 0 else { throw AppError("读取登录钥匙串失败，请检查解锁状态及访问权限。") }
+        guard result.status == 0 else { throw AppError.keychainRead }
         let raw = result.stdout.last == 10 ? Data(result.stdout.dropLast()) : result.stdout
         guard Data(hexBytes: raw) != nil else { return raw }
 
         // security -w prints binary passwords and literal ASCII hex in the same form.
         let detail = try execute(["find-generic-password", "-g"] + query)
-        guard detail.status == 0 else { throw AppError("无法核对钥匙串凭证的十六进制格式。") }
+        guard detail.status == 0 else { throw AppError.keychainHexCheck }
         let content = String(decoding: detail.stderr, as: UTF8.self)
         let range = NSRange(content.startIndex..., in: content)
         if let match = Self.hexDetail.firstMatch(in: content, range: range),
@@ -56,28 +56,28 @@ public struct MacKeychain: Keychain {
            let bytes = Data(hexBytes: content[digits].utf8) { return bytes }
         if let match = Self.textDetail.firstMatch(in: content, range: range),
            let value = Range(match.range(at: 1), in: content) { return Data(content[value].utf8) }
-        throw AppError("无法识别钥匙串凭证的十六进制格式。")
+        throw AppError.keychainHexFormat
     }
 
     public func write(service: String, account: String, raw: Data) throws {
         let command = try Self.writeCommand(service: service, account: account, raw: raw, path: path)
         guard try execute(["-i"], input: command).status == 0 else {
-            throw AppError("写入登录钥匙串失败，请检查解锁状态及访问权限。")
+            throw AppError.keychainWrite
         }
     }
 
     public func delete(service: String, account: String) throws {
         // This app only deletes snapshots. The active entry is never deleted.
-        guard service == Self.vaultService else { throw AppError("只能删除账号池快照。") }
+        guard service == Self.vaultService else { throw AppError.protectedKeychainEntry }
         let result = try execute(["delete-generic-password", "-s", service, "-a", account, path])
         guard result.status == 0 || result.status == Self.notFound else {
-            throw AppError("删除 vault 快照失败，请检查钥匙串权限。")
+            throw AppError.keychainDelete
         }
     }
 
     static func writeCommand(service: String, account: String, raw: Data, path: String) throws -> Data {
         guard [service, account, path].allSatisfy({ !$0.utf8.contains(10) && !$0.utf8.contains(0) }) else {
-            throw AppError("登录钥匙串路径不适用于 security 交互模式。")
+            throw AppError.keychainPath
         }
         let prefix = "add-generic-password -U -s \(quote(service)) -a \(quote(account))"
         let suffix = " \(quote(path))\n"
@@ -86,7 +86,7 @@ public struct MacKeychain: Keychain {
             line = prefix + " -w " + quote(String(decoding: raw, as: UTF8.self)) + suffix
         }
         guard line.utf8.count < 4096 else {
-            throw AppError("凭证超过 security 交互模式单行上限。")
+            throw AppError.credentialTooLong
         }
         return Data(line.utf8)
     }
@@ -169,7 +169,7 @@ struct Vault {
             defer { close(fd) }
             try PrivateFiles.write(raw, to: path(account))
         }
-        guard try read(account) == raw else { throw AppError("vault 快照回读校验失败。") }
+        guard try read(account) == raw else { throw AppError.snapshotVerification }
     }
 
     func delete(_ account: Account) throws {
@@ -179,7 +179,7 @@ struct Vault {
             defer { close(fd) }
             if unlink(path(account).path) != 0 && errno != ENOENT { throw PrivateFiles.ioError }
         }
-        guard try read(account) == nil else { throw AppError("删除 vault 快照后回读仍可见。") }
+        guard try read(account) == nil else { throw AppError.snapshotDeletionVerification }
     }
 
     private func path(_ account: Account) -> URL { directory.appendingPathComponent(account.accountID) }

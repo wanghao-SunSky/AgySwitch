@@ -74,7 +74,7 @@ public final class AccountPool {
     @discardableResult
     public func save(alias: String, expectedEmail: String) throws -> Account {
         try store.locked(write: true) { registry in
-            guard let active = try active() else { throw AppError("当前 agy 未登录，请先完成 agy 登录。") }
+            guard let active = try active() else { throw AppError.signInRequired }
             guard active.identity.email.lowercased() == expectedEmail.lowercased() else { throw Self.activeChanged }
             let existing = registry.index(email: active.identity.email)
             try check(alias: alias, in: registry, except: existing)
@@ -156,7 +156,7 @@ public final class AccountPool {
                 return nil
             }
             guard let current = registry.index(email: identity.email) else {
-                throw AppError("当前账号未纳管，请先保存当前账号。")
+                throw AppError.unsavedAccount
             }
             registry.accounts[current].cooldownUntil = until
             registry.accounts[current].exhaustedReason = reason
@@ -181,7 +181,7 @@ public final class AccountPool {
         return alias
     }
 
-    private static let activeChanged = AppError("当前 agy 登录已变化，请刷新后重试。")
+    private static let activeChanged = AppError.activeChanged
 
     private func readActive() throws -> Data? {
         try keychain.read(service: MacKeychain.activeService, account: MacKeychain.activeAccount)
@@ -194,17 +194,17 @@ public final class AccountPool {
 
     private func index(for id: String, in registry: Registry) throws -> Int {
         guard let index = registry.accounts.firstIndex(where: { $0.accountID == id }) else {
-            throw AppError("账号已从账号池移除，请刷新后重试。")
+            throw AppError.accountMissing
         }
         return index
     }
 
     private func check(alias: String, in registry: Registry, except index: Int?) throws {
         guard Validation.alias.matchesWhole(alias) else {
-            throw AppError("别名须以字母或数字开头，最多 48 个字符，可包含 . _ -。")
+            throw AppError.invalidAlias
         }
         if let other = registry.index(alias: alias), other != index {
-            throw AppError("该别名已被其他账号使用。")
+            throw AppError.duplicateAlias
         }
     }
 
@@ -221,12 +221,12 @@ public final class AccountPool {
 
     private func nextTarget(in registry: Registry, current: Int?, now: Double) throws -> Int {
         let accounts = registry.accounts
-        guard !accounts.isEmpty else { throw AppError("账号池为空，请先保存当前账号。") }
+        guard !accounts.isEmpty else { throw AppError.emptyPool }
         let start = current.map { $0 + 1 } ?? 0
         let others = (Array(start..<accounts.count) + Array(0..<start)).filter { $0 != current }
         if let available = others.first(where: { !accounts[$0].cooling(at: now) }) { return available }
-        if others.isEmpty { throw AppError("账号池没有其他账号可切换。") }
-        throw AppError("其余账号都在冷却，请等到期后再切换。")
+        if others.isEmpty { throw AppError.noOtherAccounts }
+        throw AppError.allOthersCooling
     }
 
     private func switchTo(_ target: Int, in registry: inout Registry, identity: Identity?,
@@ -236,11 +236,11 @@ public final class AccountPool {
         let current = identity.flatMap { registry.index(email: $0.email) }
         if current == target { return SwitchOutcome(target: account.alias, changed: false) }
         guard let raw = try vault.read(account) else {
-            throw AppError("目标账号缺少 vault 快照，请重新登录该账号后保存。")
+            throw AppError.missingSnapshot
         }
         let targetIdentity = try Identity.parse(raw)
         guard targetIdentity.email.lowercased() == account.email.lowercased() else {
-            throw AppError("目标 vault 快照与账号池记录不匹配。")
+            throw AppError.snapshotMismatch
         }
         let previous = current.map { registry.accounts[$0].alias }
 
@@ -255,14 +255,14 @@ public final class AccountPool {
             guard try readActive() == latest?.raw else { continue }
             try keychain.write(service: MacKeychain.activeService, account: MacKeychain.activeAccount, raw: raw)
             guard try readActive() == raw else {
-                throw AppError("切换后钥匙串回读不一致，请刷新确认当前账号。")
+                throw AppError.switchVerification
             }
             recordUse(&registry.accounts[target], identity: targetIdentity, now: now)
             registry.lastActiveAlias = previous
             do { try store.save(registry) }
-            catch { throw AppError("钥匙串已切换并通过回读，账号池使用记录写入失败。") }
+            catch { throw AppError.switchMetadataWrite }
             return SwitchOutcome(target: account.alias, changed: true)
         }
-        throw AppError("当前 agy 凭证正在刷新，请稍后重试。")
+        throw AppError.credentialRefreshing
     }
 }

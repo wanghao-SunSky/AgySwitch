@@ -155,7 +155,7 @@ final class LogTail {
 
     let directory: URL
     private var cursors: [FileID: Cursor] = [:]
-    static let unreadable = AppError("本轮日志或钥匙串暂不可读。")
+    static let unreadable = AppError.watchUnreadable
 
     init(directory: URL) { self.directory = directory }
 

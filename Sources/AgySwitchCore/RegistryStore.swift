@@ -3,9 +3,9 @@ import Darwin
 import Foundation
 
 enum PrivateFiles {
-    static let directoryError = AppError("账号池或 vault 目录必须归当前用户所有，且权限为 0700。")
-    static let fileError = AppError("账号池或 vault 文件必须归当前用户所有，且权限为 0600。")
-    static let ioError = AppError("本地文件操作失败，请检查目录权限与磁盘空间。")
+    static let directoryError = AppError.insecureDirectory
+    static let fileError = AppError.insecureFile
+    static let ioError = AppError.fileIO
 
     static func directory(_ url: URL, create: Bool = false) throws -> Int32? {
         if create {
