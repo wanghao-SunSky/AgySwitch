@@ -81,6 +81,26 @@ final class WatcherTests: XCTestCase {
         }
     }
 
+    func testAcpErrorsRotateAndRetireBothLogFamilies() throws {
+        for signal in ["RESOURCE_EXHAUSTED", "HTTP 429"] {
+            try scenario { logs, clock, keychain, pool, accounts in
+                let cli = logs.appendingPathComponent("cli-running.log")
+                let acp = logs.appendingPathComponent("acp-server-20261120_185551-56432.log")
+                try put("", at: cli)
+                let watcher = try AutoSwitchWatcher(pool: pool, directory: logs, clock: { clock.now },
+                                                    monotonic: { clock.uptime })
+                try put("E1120 19:00:00.123456 429 client.go:25] request failed: \(signal) retry after 1h\n", at: acp)
+                XCTAssertEqual(try watcher.poll(cooldown: 18_000)?.target, accounts[1].alias)
+                clock.advance(31)
+                for log in [acp, cli] {
+                    try put("HTTP 429 accountEmail=two@example.com retry after 1h\n", at: log, append: true)
+                }
+                XCTAssertNil(try watcher.poll(cooldown: 18_000))
+                XCTAssertEqual(keychain.activeWrites, 1)
+            }
+        }
+    }
+
     func testEventsDuringDebounceDoNotEscapeThroughPendingContext() throws {
         try scenario { logs, clock, keychain, pool, entries in
             let watcher = try AutoSwitchWatcher(pool: pool, directory: logs, clock: { clock.now },
@@ -171,7 +191,7 @@ final class WatcherTests: XCTestCase {
             let entries = try ["one", "two", "three"].map { name in
                 let email = name + "@example.com"
                 keychain.active = try credential(email)
-                return try pool.save(alias: name, expectedEmail: email)
+                return try pool.save(alias: name, expectedEmail: email).account
             }
             keychain.active = try credential("one@example.com")
             try body(logs, clock, keychain, pool, entries)

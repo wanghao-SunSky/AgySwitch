@@ -215,7 +215,7 @@ final class LogTail {
         catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError {
             return // agy may not have created the log directory yet.
         } catch { throw Self.unreadable }
-        for name in files where name.hasPrefix("cli-") && name.hasSuffix(".log") {
+        for name in files where name.hasSuffix(".log") && (name.hasPrefix("cli-") || name.hasPrefix("acp-server-")) {
             let fd = open(directory.appendingPathComponent(name).path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
             guard fd >= 0 else { continue }
             defer { close(fd) }

@@ -28,15 +28,15 @@ Since AgySwitch reads and writes macOS Keychain credentials and uses local ad-ho
 Clone https://github.com/wanghao-SunSky/AgySwitch.git to /tmp/AgySwitch and perform a full security audit of every file under Sources/ and scripts/ before building anything:
 1. Verify zero network activity: confirm all code under Sources/, scripts/build_app.sh, and scripts/generate_icon.swift makes no network requests (no URLSession, NWConnection, sockets, or outbound calls; only scripts/install.sh downloads releases from this GitHub repo) and Package.swift has zero third-party dependencies.
 2. Verify Keychain & file boundaries: confirm it only reads/writes the macOS login Keychain entries for "gemini" / "antigravity" and "agy-acct-vault" via `/usr/bin/security -i` stdin pipes, never writes plaintext tokens to disk (only non-sensitive metadata in ~/.config/agy-acct/registry.json), and never modifies agy's settings.json, MCP configs, skills, or history.
-3. Verify passive log monitoring: confirm the quota watcher only tails `~/.gemini/antigravity-cli/log/cli-*.log` in read-only mode.
+3. Verify passive log monitoring: confirm the quota watcher only tails `~/.gemini/antigravity-cli/log/cli-*.log` and `acp-server-*.log` in read-only mode.
 
 Present a concise security audit report with file and line references and wait for my confirmation. Once I approve, run `swift test`, then run `./scripts/build_app.sh --install` to compile and install `/Applications/AgySwitch.app` from source, and launch it with `open -a /Applications/AgySwitch.app`.
 ```
 
 ### Option 3: Manual Download
 
-- 📦 [**Download DMG Installer (`AgySwitch-v0.2.0-macos-arm64.dmg`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.0/AgySwitch-v0.2.0-macos-arm64.dmg)
-- 🗂️ [**Download ZIP Archive (`AgySwitch-v0.2.0-macos-arm64.zip`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.0/AgySwitch-v0.2.0-macos-arm64.zip)
+- 📦 [**Download DMG Installer (`AgySwitch-v0.2.1-macos-arm64.dmg`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.1/AgySwitch-v0.2.1-macos-arm64.dmg)
+- 🗂️ [**Download ZIP Archive (`AgySwitch-v0.2.1-macos-arm64.zip`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.1/AgySwitch-v0.2.1-macos-arm64.zip)
 - 🔗 [**GitHub Releases & `SHA256SUMS.txt`**](https://github.com/wanghao-SunSky/AgySwitch/releases/latest)
 
 **First Launch Note (Manual Browser Downloads Only)**: Because AgySwitch is distributed with local ad-hoc signing rather than a paid Apple Developer ID certificate, macOS Gatekeeper may quarantine archives downloaded via a web browser. If macOS says the app is "damaged" or "cannot be verified" after dragging it to `/Applications`, clear the browser quarantine attribute once:
@@ -80,13 +80,14 @@ Heavy daily usage of frontier models in Google Antigravity CLI (`agy`) quickly e
 - The entire `AgySwitch.app` bundle is only **~2.5 MB** (**~1.6 MB** main executable), runs strictly as a menu bar agent (`LSUIElement`, no Dock icon clutter), adapts automatically to macOS Light and Dark appearances, and supports one-click **Launch at Login**.
 - **Built-in Bilingual UI (English & 简体中文)**: Automatically follows your macOS system language by default, or lets you switch between English and Simplified Chinese instantly from the top-right `⋯` menu without restarting.
 
-### 2. Zero-Friction Account Capture & Instant Switching
-- **Automatic Unsaved Account Detection**: Open the menu bar popover after logging into a new account in `agy`—AgySwitch detects the unmanaged Keychain credential and surfaces a top **Save** capsule. Enter an alias and press Return to snapshot it.
+### 2. Zero-Friction Account Capture, Switching & Client Reload
+- **One-Click Add Account (`+`)**: Click `+` in the top bar to safely back up your current login, clear the active login slot, and launch `agy` in a sized macOS Terminal window (`38×108`) for official browser OAuth sign-in. Once signed in, AgySwitch detects the new account automatically and surfaces a top **Save** capsule.
 - **One-Click & Shortcut Switching**: Click any account row to switch immediately, or press **`⌘↩`** to jump straight to the next available (non-cooling) account.
+- **Optional Client Reload (Desktop + T3 Backend + CLI)**: Click **Reload Clients** on the post-switch banner (or enable **Auto-Reload Clients on Switch** in `⋯`) to gracefully restart a running `Antigravity.app`, recycle `agy acp` backends without closing T3 Code windows, and stop stale `agy` CLI processes so they don't overwrite the newly switched Keychain credential.
 - **Cooldown & Account Management**: Right-click any account row to mark a cooldown (`5h` / `3h` / `1h`), clear an active cooldown, rename its alias, or remove the snapshot.
 
 ### 3. Automatic Quota-Exhaustion Switching (Passive Local Log Monitoring)
-- When **Auto-switch on quota exhaustion** is enabled, AgySwitch passively tails newly appended lines in `~/.gemini/antigravity-cli/log/cli-*.log` locally—**making zero network requests**.
+- When **Auto-switch on quota limit** is enabled, AgySwitch passively tails newly appended lines in `~/.gemini/antigravity-cli/log/cli-*.log` and `acp-server-*.log` (covering both terminal `agy` and T3 Code sessions)—**making zero network requests**.
 - Accurately detects `RESOURCE_EXHAUSTED`, `QUOTA_EXHAUSTED`, `MODEL_CAPACITY_EXHAUSTED`, and `429` rate-limit errors:
   - **False-Positive Filtering**: Filters out glog thread IDs containing `429` and non-error configuration lines.
   - **30-Second Debounce & Log Retirement**: Retires previous session log markers immediately after a switch so an already-running process emitting trailing errors never triggers cascading switches.

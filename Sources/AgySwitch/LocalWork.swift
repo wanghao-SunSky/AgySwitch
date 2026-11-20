@@ -19,16 +19,14 @@ final class LocalWork {
     private var reportedWarning: AppError?
     var onUpdate: (Update) -> Void = { _ in }
 
-    func perform<T>(mutatingLogin: Bool = false, _ action: @escaping (AccountPool) throws -> T,
-                    completion: @escaping (Result<T, Error>, Result<PoolSnapshot, Error>) -> Void) {
+    func perform<T>(_ action: @escaping (AccountPool) throws -> T, changedLogin: @escaping (T) -> Bool,
+                    completion: @escaping (Result<T, Error>) -> Void) {
         queue.async {
             let outcome = Result { try action(self.pool) }
-            if mutatingLogin, case let .success(value) = outcome,
-               let result = value as? SwitchOutcome, result.changed {
+            if case let .success(value) = outcome, changedLogin(value) {
                 self.watcher?.didSwitchManually()
             }
-            let snapshot = Result { try self.pool.snapshot() }
-            DispatchQueue.main.async { completion(outcome, snapshot) }
+            DispatchQueue.main.async { completion(outcome) }
         }
     }
 

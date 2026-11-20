@@ -15,12 +15,12 @@ final class RegistryStoreTests: XCTestCase {
             let backup = try credential("backup@example.com")
 
             keychain.active = primary
-            let savedPrimary = try pool.save(alias: "primary", expectedEmail: "Primary@example.com")
+            let savedPrimary = try pool.save(alias: "primary", expectedEmail: "Primary@example.com").account
             XCTAssertEqual(savedPrimary.store, .keychain)
             XCTAssertEqual(savedPrimary.alias, "primary")
 
             keychain.active = backup
-            let savedBackup = try pool.save(alias: "backup", expectedEmail: "backup@example.com")
+            let savedBackup = try pool.save(alias: "backup", expectedEmail: "backup@example.com").account
             XCTAssertEqual(savedBackup.store, .keychain)
 
             keychain.active = refreshed

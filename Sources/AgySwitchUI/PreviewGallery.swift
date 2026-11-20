@@ -29,8 +29,8 @@ public enum PreviewGallery {
                     cooldownUntil: time + 15_120, exhaustedReason: .resource)
         ]
         let scenarios: [(String, String, MenuFeedback?)] = [
-            ("overview", "lin.new@example.com", .switchResult(target: "backup", changed: true)),
-            ("managed", accounts[0].email, nil)
+            ("overview", accounts[0].email, .switchResult(target: accounts[0].alias, changed: true, offersReload: true)),
+            ("managed", accounts[0].email, .switchResult(target: accounts[0].alias, changed: true, offersReload: true))
         ]
         for (name, currentEmail, feedback) in scenarios {
             let pool = PoolSnapshot(registry: Registry(accounts: accounts), currentEmail: currentEmail)
@@ -41,9 +41,8 @@ public enum PreviewGallery {
                 for (language, suffix) in [(AppLanguage.zhHans, ""), (.en, "-en")] {
                     let model = MenuModel(pool: pool, automatic: true, listening: true,
                                           feedback: feedback, language: language)
-                    // The overview deliberately puts all three row states alongside the save prompt.
-                    let view = MenuPopoverView(model: model, previewActiveID: name == "overview" ? accounts[0].id : nil,
-                                               referenceDate: date)
+                    model.showsAddAccount = name == "managed"
+                    let view = MenuPopoverView(model: model, referenceDate: date)
                     try render(view, appearance: appearance, scheme: scheme,
                                to: directory.appendingPathComponent("\(name)\(suffix)-\(variant).png"))
                 }

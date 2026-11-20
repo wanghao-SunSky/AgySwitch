@@ -4,6 +4,7 @@ public protocol Keychain {
     func read(service: String, account: String) throws -> Data?
     func write(service: String, account: String, raw: Data) throws
     func delete(service: String, account: String) throws
+    func clearActiveLogin() throws
 }
 
 public struct MacKeychain: Keychain {
@@ -67,11 +68,18 @@ public struct MacKeychain: Keychain {
     }
 
     public func delete(service: String, account: String) throws {
-        // This app only deletes snapshots. The active entry is never deleted.
         guard service == Self.vaultService else { throw AppError.protectedKeychainEntry }
+        try deleteEntry(service: service, account: account, failure: .keychainDelete)
+    }
+
+    public func clearActiveLogin() throws {
+        try deleteEntry(service: Self.activeService, account: Self.activeAccount, failure: .activeLoginDelete)
+    }
+
+    private func deleteEntry(service: String, account: String, failure: AppError) throws {
         let result = try execute(["delete-generic-password", "-s", service, "-a", account, path])
         guard result.status == 0 || result.status == Self.notFound else {
-            throw AppError.keychainDelete
+            throw failure
         }
     }
 

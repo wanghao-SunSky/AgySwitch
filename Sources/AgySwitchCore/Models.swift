@@ -21,11 +21,12 @@ public struct Identity: Equatable {
         // Python json.loads(bytes) also accepts a UTF-8 BOM and UTF-16/32.
         guard let object = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
               let email = object["id_token_email"] as? String, Validation.emailIsValid(email),
-              let method = object["auth_method"] as? String, Validation.authMethod.matchesWhole(method),
-              object["token"] is [String: Any], object["writer_id"] is String else {
+              let token = object["token"], !(token is NSNull) else {
             throw invalid
         }
-        return Identity(email: email, authMethod: method)
+        // Only the registry's short method label is normalized. The vault stores raw unchanged.
+        let method = (object["auth_method"] as? String).flatMap { Validation.authMethod.matchesWhole($0) ? $0 : nil }
+        return Identity(email: email, authMethod: method ?? "oauth")
     }
 
     private static let invalid = AppError.invalidCredential
@@ -66,7 +67,7 @@ extension NSRegularExpression {
 
 enum Validation {
     static let alias = try! NSRegularExpression(pattern: #"[A-Za-z0-9][A-Za-z0-9_.-]{0,47}"#)
-    static let emailPattern = #"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:.[A-Za-z0-9-]+)+"#
+    static let emailPattern = #"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"#
     static let email = try! NSRegularExpression(pattern: emailPattern)
     static let authMethod = try! NSRegularExpression(pattern: #"[A-Za-z][A-Za-z0-9_.-]{0,31}"#)
     static let accountID = try! NSRegularExpression(pattern: #"[0-9a-f]{64}"#)

@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-public struct PoolSnapshot {
+public struct PoolSnapshot: Equatable {
     public let registry: Registry
     public let currentEmail: String?
 
@@ -24,16 +24,19 @@ public struct PoolSnapshot {
 public struct SwitchOutcome: Equatable {
     public let target: String
     public let changed: Bool
+    public let snapshot: PoolSnapshot
 }
 
 public struct PoolCheck {
-    public let accountCount: Int
-    public let hasLogin: Bool
+    public let snapshot: PoolSnapshot
+    public var accountCount: Int { snapshot.registry.accounts.count }
+    public var hasLogin: Bool { snapshot.currentEmail != nil }
     public let logsReadable: Bool
     public let invalidVaultCount: Int
 }
 
 public final class AccountPool {
+    private typealias Login = (raw: Data, identity: Identity)
     public let store: RegistryStore
     private let keychain: any Keychain
     private let vault: Vault
@@ -65,62 +68,82 @@ public final class AccountPool {
             var isDirectory: ObjCBool = false
             let logsReadable = FileManager.default.fileExists(atPath: logDirectory.path, isDirectory: &isDirectory)
                 && isDirectory.boolValue && access(logDirectory.path, R_OK | X_OK) == 0
-            return PoolCheck(accountCount: registry.accounts.count, hasLogin: active != nil,
+            return PoolCheck(snapshot: PoolSnapshot(registry: registry, currentEmail: active?.identity.email),
                              logsReadable: logsReadable,
                              invalidVaultCount: invalid.count)
         }
     }
 
     @discardableResult
-    public func save(alias: String, expectedEmail: String) throws -> Account {
+    public func save(alias: String, expectedEmail: String) throws -> (account: Account, snapshot: PoolSnapshot) {
         try store.locked(write: true) { registry in
             guard let active = try active() else { throw AppError.signInRequired }
             guard active.identity.email.lowercased() == expectedEmail.lowercased() else { throw Self.activeChanged }
-            let existing = registry.index(email: active.identity.email)
-            try check(alias: alias, in: registry, except: existing)
-            let index = existing ?? registry.accounts.count
-            let now = clock()
-            if existing == nil {
-                let id = Data(SHA256.hash(data: Data(active.identity.email.lowercased().utf8))).hex
-                registry.accounts.append(Account(accountID: id, alias: alias, email: active.identity.email,
-                                                 authMethod: active.identity.authMethod, addedAt: now, lastUsedAt: now))
-            } else {
-                rename(&registry, at: index, to: alias)
-                recordUse(&registry.accounts[index], identity: active.identity, now: now)
-            }
-            let account = registry.accounts[index]
-            try vault.write(account, raw: active.raw)
-            do { try store.save(registry) }
-            catch {
-                if existing == nil { try? vault.delete(account) }
-                throw error
-            }
-            return account
+            let account = try save(active, alias: alias, in: &registry)
+            return (account, PoolSnapshot(registry: registry, currentEmail: active.identity.email))
         }
     }
 
-    public func rename(accountID: String, alias: String) throws {
+    @discardableResult
+    public func beginAddAccount() throws -> PoolSnapshot {
+        try store.locked(write: true) { registry in
+            guard var current = try active() else { return PoolSnapshot(registry: registry) }
+            for _ in 0..<3 {
+                let email = current.identity.email
+                if let index = registry.index(email: email) {
+                    if try vault.read(registry.accounts[index]) != current.raw {
+                        try vault.write(registry.accounts[index], raw: current.raw)
+                    }
+                } else {
+                    let alias = Self.defaultAlias(registry: registry, email: email)
+                    try save(current, alias: alias, in: &registry)
+                }
+
+                // agy can refresh outside the registry lock. Back up those bytes too before clearing.
+                guard let latest = try readActive() else { return PoolSnapshot(registry: registry) }
+                if latest == current.raw {
+                    try keychain.clearActiveLogin()
+                    guard try readActive() == nil else { throw AppError.activeLoginVerification }
+                    return PoolSnapshot(registry: registry)
+                }
+                let identity = try Identity.parse(latest)
+                guard identity.email.lowercased() == email.lowercased() else { throw Self.activeChanged }
+                current = (latest, identity)
+            }
+            throw AppError.credentialRefreshing
+        }
+    }
+
+    @discardableResult
+    public func rename(accountID: String, alias: String) throws -> PoolSnapshot {
         try store.locked(write: true) { registry in
             let index = try index(for: accountID, in: registry)
             try check(alias: alias, in: registry, except: index)
+            let email = try active()?.identity.email
             rename(&registry, at: index, to: alias)
             try store.save(registry)
+            return PoolSnapshot(registry: registry, currentEmail: email)
         }
     }
 
-    public func cooldown(accountID: String, seconds: Double?) throws {
+    @discardableResult
+    public func cooldown(accountID: String, seconds: Double?) throws -> PoolSnapshot {
         try store.locked(write: true) { registry in
             let index = try index(for: accountID, in: registry)
+            let email = try active()?.identity.email
             registry.accounts[index].cooldownUntil = seconds.map { clock() + $0 }
             registry.accounts[index].exhaustedReason = seconds == nil ? nil : .manual
             try store.save(registry)
+            return PoolSnapshot(registry: registry, currentEmail: email)
         }
     }
 
-    public func remove(accountID: String) throws {
+    @discardableResult
+    public func remove(accountID: String) throws -> PoolSnapshot {
         try store.locked(write: true) { registry in
             let index = try index(for: accountID, in: registry)
             let account = registry.accounts[index]
+            let email = try active()?.identity.email
             let snapshot = try vault.read(account)
             try vault.delete(account)
             registry.accounts.remove(at: index)
@@ -130,32 +153,33 @@ public final class AccountPool {
                 if let snapshot { try vault.write(account, raw: snapshot) }
                 throw error
             }
+            return PoolSnapshot(registry: registry, currentEmail: email)
         }
     }
 
     public func switchTo(accountID: String) throws -> SwitchOutcome {
         try store.locked(write: true) { registry in
             let target = try index(for: accountID, in: registry)
-            return try switchTo(target, in: &registry, identity: active()?.identity, now: clock())
+            return try switchTo(target, in: &registry, login: active(), now: clock())
         }
     }
 
     public func next() throws -> SwitchOutcome {
         try store.locked(write: true) { registry in
-            let identity = try active()?.identity
+            let login = try active()
             let now = clock()
-            let current = identity.flatMap { registry.index(email: $0.email) }
+            let current = login.flatMap { registry.index(email: $0.identity.email) }
             let target = try nextTarget(in: registry, current: current, now: now)
-            return try switchTo(target, in: &registry, identity: identity, now: now)
+            return try switchTo(target, in: &registry, login: login, now: now)
         }
     }
 
     public func onQuota(email: String, until: Double, reason: ExhaustionReason) throws -> SwitchOutcome? {
         try store.locked(write: true) { registry in
-            guard let identity = try active()?.identity, identity.email.lowercased() == email.lowercased() else {
+            guard let login = try active(), login.identity.email.lowercased() == email.lowercased() else {
                 return nil
             }
-            guard let current = registry.index(email: identity.email) else {
+            guard let current = registry.index(email: login.identity.email) else {
                 throw AppError.unsavedAccount
             }
             registry.accounts[current].cooldownUntil = until
@@ -163,7 +187,7 @@ public final class AccountPool {
             try store.save(registry)
             let now = clock()
             let target = try nextTarget(in: registry, current: current, now: now)
-            return try switchTo(target, in: &registry, identity: identity, now: now)
+            return try switchTo(target, in: &registry, login: login, now: now)
         }
     }
 
@@ -187,9 +211,36 @@ public final class AccountPool {
         try keychain.read(service: MacKeychain.activeService, account: MacKeychain.activeAccount)
     }
 
-    private func active() throws -> (raw: Data, identity: Identity)? {
+    private func active() throws -> Login? {
         guard let raw = try readActive() else { return nil }
         return (raw, try Identity.parse(raw))
+    }
+
+    @discardableResult
+    private func save(_ active: Login, alias: String,
+                      in registry: inout Registry) throws -> Account {
+        let existing = registry.index(email: active.identity.email)
+        try check(alias: alias, in: registry, except: existing)
+        let index = existing ?? registry.accounts.count
+        let now = clock()
+        if existing == nil {
+            let id = Data(SHA256.hash(data: Data(active.identity.email.lowercased().utf8))).hex
+            registry.accounts.append(Account(accountID: id, alias: alias, email: active.identity.email,
+                                             authMethod: active.identity.authMethod, addedAt: now, lastUsedAt: now))
+        } else {
+            rename(&registry, at: index, to: alias)
+            recordUse(&registry.accounts[index], identity: active.identity, now: now)
+        }
+        let account = registry.accounts[index]
+        if try existing == nil || vault.read(account) != active.raw {
+            try vault.write(account, raw: active.raw)
+        }
+        do { try store.save(registry) }
+        catch {
+            if existing == nil { try? vault.delete(account) }
+            throw error
+        }
+        return account
     }
 
     private func index(for id: String, in registry: Registry) throws -> Int {
@@ -229,12 +280,15 @@ public final class AccountPool {
         throw AppError.allOthersCooling
     }
 
-    private func switchTo(_ target: Int, in registry: inout Registry, identity: Identity?,
+    private func switchTo(_ target: Int, in registry: inout Registry, login: Login?,
                           now: Double) throws -> SwitchOutcome {
         let account = registry.accounts[target]
-        let expected = identity?.email.lowercased()
-        let current = identity.flatMap { registry.index(email: $0.email) }
-        if current == target { return SwitchOutcome(target: account.alias, changed: false) }
+        let expected = login?.identity.email.lowercased()
+        let current = login.flatMap { registry.index(email: $0.identity.email) }
+        if current == target {
+            return SwitchOutcome(target: account.alias, changed: false,
+                                 snapshot: PoolSnapshot(registry: registry, currentEmail: login?.identity.email))
+        }
         guard let raw = try vault.read(account) else {
             throw AppError.missingSnapshot
         }
@@ -245,14 +299,20 @@ public final class AccountPool {
         let previous = current.map { registry.accounts[$0].alias }
 
         // CLI and App share the directory lock. agy itself may refresh the active bytes independently.
+        var latest = login
         for _ in 0..<3 {
-            let latest = try active()
-            guard latest?.identity.email.lowercased() == expected else { throw Self.activeChanged }
             if let current, let latest {
-                try vault.write(registry.accounts[current], raw: latest.raw)
+                if try vault.read(registry.accounts[current]) != latest.raw {
+                    try vault.write(registry.accounts[current], raw: latest.raw)
+                }
                 recordUse(&registry.accounts[current], identity: latest.identity, now: now)
             }
-            guard try readActive() == latest?.raw else { continue }
+            let observed = try readActive()
+            if observed != latest?.raw {
+                latest = try observed.map { ($0, try Identity.parse($0)) }
+                guard latest?.identity.email.lowercased() == expected else { throw Self.activeChanged }
+                continue
+            }
             try keychain.write(service: MacKeychain.activeService, account: MacKeychain.activeAccount, raw: raw)
             guard try readActive() == raw else {
                 throw AppError.switchVerification
@@ -261,7 +321,8 @@ public final class AccountPool {
             registry.lastActiveAlias = previous
             do { try store.save(registry) }
             catch { throw AppError.switchMetadataWrite }
-            return SwitchOutcome(target: account.alias, changed: true)
+            return SwitchOutcome(target: account.alias, changed: true,
+                                 snapshot: PoolSnapshot(registry: registry, currentEmail: targetIdentity.email))
         }
         throw AppError.credentialRefreshing
     }

@@ -28,15 +28,15 @@ curl -fsSL https://raw.githubusercontent.com/wanghao-SunSky/AgySwitch/main/scrip
 请先把 https://github.com/wanghao-SunSky/AgySwitch.git 克隆到 /tmp/AgySwitch，在执行任何编译或安装前，逐文件审计 Sources/ 和 scripts/ 下的全部代码：
 1. 核实零网络请求：确认 Sources/ 全部应用源码以及 scripts/build_app.sh、scripts/generate_icon.swift 没有任何联网或外传数据行为（无 URLSession、NWConnection、Socket 或外部调用；仅 scripts/install.sh 用于从本仓库 Releases 下载安装包），且 Package.swift 零第三方依赖。
 2. 核实 Keychain 与文件边界：确认只读写 macOS login Keychain 中的 `gemini / antigravity` 与 `agy-acct-vault` 条目，敏感写入均通过 `/usr/bin/security -i` 标准输入管道传参，不落盘任何明文 Token（`~/.config/agy-acct/registry.json` 仅存别名、邮箱和冷却时间），且绝不修改 `agy` 的 `settings.json`、MCP、Skills 或对话历史。
-3. 核实日志监听只读：确认本地额度监听器仅对 `~/.gemini/antigravity-cli/log/cli-*.log` 做只读监听。
+3. 核实日志监听只读：确认本地额度监听器仅对 `~/.gemini/antigravity-cli/log/cli-*.log` 与 `acp-server-*.log` 做只读监听。
 
 请先向我输出一份简明的安全审计报告（附关键文件与行号）并等待我确认；待我确认安全后，再运行 `swift test` 验证测试通过，随后执行 `./scripts/build_app.sh --install` 从本机源码编译打包安装到 `/Applications/AgySwitch.app`，并用 `open -a /Applications/AgySwitch.app` 启动。
 ```
 
 ### 方式三：手动下载安装包
 
-- 📦 [**下载 DMG 安装包（`AgySwitch-v0.2.0-macos-arm64.dmg`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.0/AgySwitch-v0.2.0-macos-arm64.dmg)
-- 🗂️ [**下载 ZIP 压缩包（`AgySwitch-v0.2.0-macos-arm64.zip`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.0/AgySwitch-v0.2.0-macos-arm64.zip)
+- 📦 [**下载 DMG 安装包（`AgySwitch-v0.2.1-macos-arm64.dmg`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.1/AgySwitch-v0.2.1-macos-arm64.dmg)
+- 🗂️ [**下载 ZIP 压缩包（`AgySwitch-v0.2.1-macos-arm64.zip`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.1/AgySwitch-v0.2.1-macos-arm64.zip)
 - 🔗 [**Releases 页面（含 `SHA256SUMS.txt` 校验值）**](https://github.com/wanghao-SunSky/AgySwitch/releases/latest)
 
 **手动下载首次打开说明**：因未购买 Apple 付费开发者证书、采用本地 ad-hoc 签名，通过浏览器手动下载后拖入 `/Applications` 打开时，若 macOS 提示「已损坏」或「无法验证开发者」，运行一行命令移除浏览器隔离属性即可：
@@ -49,7 +49,7 @@ xattr -cr /Applications/AgySwitch.app
 
 ## 界面预览 · Screenshots
 
-| 未纳管新账号提示与完整状态（浅色） | 未纳管新账号提示与完整状态（深色） |
+| 未保存新账号提示与完整状态（浅色） | 未保存新账号提示与完整状态（深色） |
 | :---: | :---: |
 | <img src="docs/screenshots/overview-light.png" width="300" alt="AgySwitch 中文浅色完整面板" /> | <img src="docs/screenshots/overview-dark.png" width="300" alt="AgySwitch 中文深色完整面板" /> |
 | **日常紧凑面板（浅色）** | **日常紧凑面板（深色）** |
@@ -80,13 +80,14 @@ xattr -cr /Applications/AgySwitch.app
 - 整个 `AgySwitch.app` 仅 **~2.5 MB**（主可执行文件 **~1.6 MB**），常驻顶部菜单栏（`LSUIElement`，不占 Dock 栏），自动跟随 macOS 浅色 / 深色外观，支持一键开启**登录时启动**。
 - **内置中/英双语界面**：默认自动跟随 macOS 系统语言，也可在右上角 `⋯` 菜单随时一键切换「跟随系统 / English / 简体中文」，无需重启即时生效。
 
-### 2. 即存即切，不打断开发心流
-- **未保存新号自动感知**：点击菜单栏图标弹出面板时，若检测到当前 Keychain 中登录了尚未入库的新账号，顶部自动浮现「保存」胶囊，输入别名回车即存。
+### 2. 一键加号、秒切与三端联动重载
+- **顶栏 `+` 一键添加账号**：点击右上角 `+` 即可先自动备份当前账号、清空活跃登录并在大尺寸终端（`38×108`）中拉起官方 `agy` 浏览器登录；登完切回菜单栏自动感知新号并浮现「保存」胶囊，随时可点原账号无损切回。
 - **单击与快捷键秒切**：单击任意账号行即可立即切换；按快捷键 **`⌘↩`** 直接切到下一个可用（非冷却）账号。
+- **一键 / 自动联动重载客户端**：切号后点击提示卡片上的「立即重载」（或在 `⋯` 菜单开启「切号后自动重载客户端」），即可优雅重开运行中的 `Antigravity.app`、重启 `agy acp` 后端（**不关闭 T3 Code 窗口**），并清理后台旧 `agy` 进程防止刷新令牌覆盖刚切好的凭证。
 - **右键冷却与账号管理**：右键任意账号行可手动标记冷却（`5h` / `3h` / `1h`）、清除冷却、重命名别名或移除账号快照。
 
 ### 3. 额度耗尽自动切换（纯本地被动日志监听）
-- 开启底部「额度耗尽自动切换」开关后，AgySwitch 仅在本地被动追踪 `~/.gemini/antigravity-cli/log/cli-*.log` 的新增日志，**全程不发任何网络探测请求**。
+- 开启底部「额度耗尽自动切换」开关后，AgySwitch 仅在本地被动追踪 `~/.gemini/antigravity-cli/log/` 下的 `cli-*.log` 与 `acp-server-*.log` 新增日志（同时覆盖终端 `agy` 与 T3 Code 会话），**全程不发任何网络探测请求**。
 - 精准识别 `RESOURCE_EXHAUSTED`、`QUOTA_EXHAUSTED`、`MODEL_CAPACITY_EXHAUSTED` 及 `429` 限流错误：
   - **误报过滤**：内置 glog 线程号 `429` 与普通配置项误报过滤；
   - **30 秒防抖与旧日志退役**：切号后立即退役旧会话日志，防止仍在运行中的旧进程继续输出报错导致连续误切；

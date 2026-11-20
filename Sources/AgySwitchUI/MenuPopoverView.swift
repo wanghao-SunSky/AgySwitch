@@ -2,7 +2,9 @@ import AgySwitchCore
 import SwiftUI
 
 public enum MenuAction {
-    case refresh, inspect, openLogs, toggleLoginItem, quit
+    case refresh, checkLogin, inspect, openLogs, toggleLoginItem, quit
+    case reloadClients, setAutoReload(Bool)
+    case beginAddAccount
     case save(alias: String, email: String)
     case select(String), next, rename(id: String, alias: String), remove(String)
     case cooldown(id: String, mark: Bool)
@@ -16,8 +18,10 @@ public struct MenuFeedback: Equatable {
     public let kind: Kind
     public let title: LocalizedText
     public let detail: LocalizedText?
+    public let offersReload: Bool
 
-    public init(_ kind: Kind, _ title: LocalizedText, detail: LocalizedText? = nil) {
+    public init(_ kind: Kind, _ title: LocalizedText, detail: LocalizedText? = nil, offersReload: Bool = false) {
+        self.offersReload = offersReload
         self.kind = kind
         self.title = title
         self.detail = detail
@@ -27,8 +31,8 @@ public struct MenuFeedback: Equatable {
         self.init(kind, title.text, detail: detail?.text)
     }
 
-    public static func switchResult(target: String, changed: Bool) -> Self {
-        if changed { return Self(.success, .switched(target), detail: AppLabel.reopenSession.text) }
+    public static func switchResult(target: String, changed: Bool, offersReload: Bool = false) -> Self {
+        if changed { return Self(.success, .switched(target), detail: AppLabel.reopenSession.text, offersReload: offersReload) }
         return Self(.info, .alreadyUsing(target))
     }
 
@@ -42,13 +46,23 @@ public struct MenuFeedback: Equatable {
 }
 
 public final class MenuModel: ObservableObject {
-    @Published public var pool: PoolSnapshot
+    @Published public private(set) var pool: PoolSnapshot
+    @Published public var autoReload = false
     @Published public var automatic: Bool
     @Published public var listening: Bool
     @Published public var cooldown: Int
     @Published public var opensAtLogin: Bool
     @Published public var feedback: MenuFeedback?
-    @Published public var busy = false
+    @Published public private(set) var refreshError: AppError?
+    @Published public var accountActionInProgress = false
+    @Published public var pendingClientReloads = 0
+    public var busy: Bool { accountActionInProgress || pendingClientReloads > 0 }
+    @Published public var showsAddAccount = false
+    @Published public var signInStarted = false {
+        didSet { updateLoginPolling() }
+    }
+    private var popoverVisible = false
+    private var loginPoll: Timer?
     @Published public var language: AppLanguage {
         didSet { refreshDisplayLanguage() }
     }
@@ -73,11 +87,52 @@ public final class MenuModel: ObservableObject {
         let resolved = language.resolved()
         if displayLanguage != resolved { displayLanguage = resolved }
     }
-}
 
-struct PopoverHeight: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+    @discardableResult
+    public func updatePool(_ snapshot: PoolSnapshot) -> Bool {
+        if refreshError != nil { refreshError = nil }
+        if signInStarted, snapshot.currentEmail != nil {
+            finishSignIn()
+        }
+        guard pool != snapshot else { return false }
+        pool = snapshot
+        return true
+    }
+
+    public func reportRefreshFailure(_ error: Error) {
+        let safe = AppError(redacting: error)
+        if refreshError != safe { refreshError = safe }
+    }
+
+    public func setPopoverVisible(_ visible: Bool) {
+        popoverVisible = visible
+        updateLoginPolling()
+    }
+
+    private func updateLoginPolling() {
+        guard signInStarted, popoverVisible else {
+            loginPoll?.invalidate()
+            loginPoll = nil
+            return
+        }
+        guard loginPoll == nil else { return }
+        let timer = Timer(fire: Date(timeIntervalSinceNow: 2), interval: 2, repeats: true) { [weak self] _ in
+            self?.send(.checkLogin)
+        }
+        timer.tolerance = 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        loginPoll = timer
+    }
+
+    deinit { loginPoll?.invalidate() }
+
+    public func finishSignIn() {
+        guard signInStarted else { return }
+        signInStarted = false
+        showsAddAccount = false
+    }
+
+    public var unsavedEmail: String? { pool.activeID == nil ? pool.currentEmail : nil }
 }
 
 public struct MenuPopoverView: View {
@@ -85,14 +140,11 @@ public struct MenuPopoverView: View {
     public static let symbol = "arrow.left.arrow.right"
 
     @ObservedObject private var model: MenuModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focused: Bool
     @State private var editor: Editor?
     @State private var input = ""
     @State private var removal: Account?
-    private let previewActiveID: String?
     private let referenceDate: Date?
-    private let onResize: (CGFloat) -> Void
 
     private enum Editor: Equatable {
         case save(String), rename(String)
@@ -112,34 +164,30 @@ public struct MenuPopoverView: View {
         }
     }
 
-    public init(model: MenuModel, onResize: @escaping (CGFloat) -> Void = { _ in }) {
+    public init(model: MenuModel) {
         self.model = model
-        previewActiveID = nil
         referenceDate = nil
-        self.onResize = onResize
     }
 
-    init(model: MenuModel, previewActiveID: String?, referenceDate: Date) {
+    init(model: MenuModel, referenceDate: Date) {
         self.model = model
-        self.previewActiveID = previewActiveID
         self.referenceDate = referenceDate
-        onResize = { _ in }
     }
 
-    private var activeID: String? { previewActiveID ?? model.pool.activeID }
+    private var activeID: String? { model.pool.activeID }
     private var accounts: [Account] { model.pool.registry.accounts }
     private var language: DisplayLanguage { model.displayLanguage }
-    private var availableToSave: String? {
-        model.pool.activeID == nil ? model.pool.currentEmail : nil
-    }
 
     public var body: some View {
         VStack(spacing: 10) {
             header
             hairline
-            if let email = availableToSave {
+            if let error = model.refreshError {
+                feedbackView(MenuFeedback(.warning, error.text))
+            }
+            if model.showsAddAccount { addAccountCard }
+            if let email = model.unsavedEmail {
                 saveCapsule(email)
-                    .transition(.opacity)
             }
             accountList
             hairline
@@ -149,14 +197,6 @@ public struct MenuPopoverView: View {
         .padding(.vertical, 11)
         .frame(width: Self.width)
         .fixedSize(horizontal: false, vertical: true)
-        .background {
-            GeometryReader { geometry in
-                Color.clear.preference(key: PopoverHeight.self, value: geometry.size.height)
-            }
-        }
-        .onPreferenceChange(PopoverHeight.self, perform: onResize)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.feedback)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: availableToSave)
         .onChange(of: model.pool.currentEmail) { _ in
             if case .save = editor { editor = nil }
         }
@@ -193,9 +233,18 @@ public struct MenuPopoverView: View {
             Circle()
                 .fill(model.listening ? Color.green : Color.secondary.opacity(0.38))
                 .frame(width: 5, height: 5)
-                .help(language[model.listening ? .listening : .listenerUnavailable])
                 .accessibilityLabel(language[model.listening ? .listening : .listenerStopped])
             Spacer()
+            Button { model.showsAddAccount.toggle() } label: {
+                Image(systemName: "plus")
+                    .frame(width: 24, height: 24)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.accentColor.opacity(model.showsAddAccount ? 0.14 : 0)))
+            }
+            .buttonStyle(QuietIconStyle())
+            .accessibilityLabel(language[.addAccount])
+            .accessibilityAddTraits(model.showsAddAccount ? .isSelected : [])
+
             Button { model.send(.refresh) } label: {
                 Image(systemName: "arrow.clockwise")
                     .frame(width: 24, height: 24)
@@ -203,7 +252,6 @@ public struct MenuPopoverView: View {
             .buttonStyle(QuietIconStyle())
             .disabled(model.busy)
             .accessibilityLabel(language[.refresh])
-            .help(language[.refreshHelp])
             Menu {
                 Menu(language[.language]) {
                     Picker(language[.language], selection: Binding(get: { model.language },
@@ -215,6 +263,10 @@ public struct MenuPopoverView: View {
                     .pickerStyle(.inline)
                     .labelsHidden()
                 }
+                Divider()
+                Toggle(language[.autoReload], isOn: Binding(get: { model.autoReload }, set: { model.send(.setAutoReload($0)) }))
+                Button(language[.reloadMenu]) { model.send(.reloadClients) }
+                    .disabled(model.busy)
                 Divider()
                 Button(language[model.opensAtLogin ? .disableLoginItem : .enableLoginItem]) { model.send(.toggleLoginItem) }
                 Button(language[.openLogs]) { model.send(.openLogs) }
@@ -231,7 +283,6 @@ public struct MenuPopoverView: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .accessibilityLabel(language[.more])
-            .help(language[.moreHelp])
         }
         .padding(.leading, 3)
         .frame(height: 26)
@@ -242,12 +293,41 @@ public struct MenuPopoverView: View {
             .accessibilityHidden(true)
     }
 
+    private var addAccountCard: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(language[.addAccount])
+                .font(.system(size: 12, weight: .semibold))
+                .accessibilityAddTraits(.isHeader)
+            if model.signInStarted {
+                Text(language[accounts.isEmpty ? .addFirstAccountAfterLaunch : .addAccountAfterLaunch])
+                if model.pool.currentEmail == nil {
+                    signInButton(.reopenSignIn)
+                }
+            } else {
+                Text(language[.addAccountGuide])
+                signInButton(.signInToAnotherAccount)
+                Text(language[.manualSignInGuide])
+            }
+        }
+        .font(.system(size: 11))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.045)))
+    }
+
+    private func signInButton(_ title: AppLabel) -> some View {
+        Button(language[title]) { model.send(.beginAddAccount) }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(model.busy)
+    }
+
     private func saveCapsule(_ email: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "person.crop.circle.badge.plus")
                     .font(.system(size: 18, weight: .regular))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.accentColor)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(language[.unsavedAccount])
@@ -257,23 +337,26 @@ public struct MenuPopoverView: View {
                 }
                 Spacer(minLength: 2)
                 if editor != .save(email) {
-                    Button(language[.save]) { begin(.save(email), value: model.pool.suggestedAlias) }
+                    Button(language[.save]) { model.send(.save(alias: model.pool.suggestedAlias, email: email)) }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .fixedSize()
                         .disabled(model.busy)
+                        .contextMenu {
+                            Button(language[.renameAlias]) { begin(.save(email), value: model.pool.suggestedAlias) }
+                        }
                 }
             }
             if editor == .save(email) { aliasEditor(.save(email)) }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.045)))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.opacity(0.09)))
     }
 
     @ViewBuilder private var accountList: some View {
         if accounts.isEmpty {
-            if availableToSave == nil {
+            if model.unsavedEmail == nil && model.refreshError == nil {
                 HStack(spacing: 9) {
                     Image(systemName: "person.2").font(.system(size: 15)).foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 4) {
@@ -346,7 +429,6 @@ public struct MenuPopoverView: View {
                 .fixedSize()
                 .accessibilityLabel(language[.defaultCooldown])
                 .accessibilityValue(LocalizedText.hours(model.cooldown / 3600).localized(in: language))
-                .help(language[.defaultCooldownHelp])
 
                 Toggle("", isOn: Binding(get: { model.automatic }, set: { model.send(.setAutomatic($0)) }))
                     .labelsHidden()
@@ -354,7 +436,6 @@ public struct MenuPopoverView: View {
                     .tint(.accentColor)
                     .controlSize(.mini)
                     .accessibilityLabel(language[.autoSwitch])
-                    .help(language[.autoSwitchHelp])
             }
             .padding(.horizontal, 3)
 
@@ -366,13 +447,16 @@ public struct MenuPopoverView: View {
                         .font(.system(size: 12, weight: .medium))
                         .fixedSize()
                     Spacer(minLength: 4)
-                    if model.busy {
-                        ProgressView().controlSize(.mini).accessibilityLabel(language[.loadingPool])
-                    } else {
-                        Text("⌘↩")
-                            .font(.system(size: 10.5, weight: .medium))
-                            .foregroundStyle(.tertiary)
+                    ZStack(alignment: .trailing) {
+                        if model.busy {
+                            ProgressView().controlSize(.mini).accessibilityLabel(language[.working])
+                        } else {
+                            Text("⌘↩")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(.tertiary)
+                        }
                     }
+                    .frame(width: 24, height: 18, alignment: .trailing)
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 30)
@@ -382,24 +466,44 @@ public struct MenuPopoverView: View {
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(model.busy || accounts.isEmpty || (accounts.count == 1 && activeID != nil))
 
-            if let feedback = model.feedback {
-                HStack(alignment: .top, spacing: 7) {
-                    Image(systemName: feedback.icon)
-                        .foregroundStyle(feedback.kind == .success ? Color.accentColor : Color.secondary)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(feedback.title.localized(in: language)).fontWeight(.medium)
-                        if let detail = feedback.detail { Text(detail.localized(in: language)).foregroundStyle(.secondary) }
+            // Reserve room for action feedback so its arrival and expiry don't move the controls.
+            ZStack(alignment: .topLeading) {
+                if let feedback = model.feedback {
+                    ViewThatFits(in: .vertical) {
+                        feedbackView(feedback).fixedSize(horizontal: false, vertical: true)
+                        ScrollView { feedbackView(feedback) }
                     }
                 }
-                .font(.system(size: 11))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.045)))
-                .transition(.opacity)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 48, alignment: .topLeading)
+        }
+    }
+
+    private func feedbackView(_ feedback: MenuFeedback) -> some View {
+        HStack(alignment: .top, spacing: 7) {
+            Image(systemName: feedback.icon)
+                .foregroundStyle(feedback.kind == .warning ? Color.orange : Color.accentColor)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(feedback.title.localized(in: language)).fontWeight(.medium)
+                    if feedback.offersReload && !model.autoReload {
+                        Spacer(minLength: 2)
+                        Button(language[.reloadClients]) { model.send(.reloadClients) }
+                            .controlSize(.mini)
+                            .fixedSize()
+                            .disabled(model.busy)
+                    }
+                }
+                if let detail = feedback.detail { Text(detail.localized(in: language)).foregroundStyle(.secondary) }
             }
         }
+        .font(.system(size: 11))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.045)))
     }
 
     private func aliasEditor(_ editing: Editor) -> some View {
@@ -508,54 +612,62 @@ private struct AccountRow: View {
     let remove: () -> Void
 
     @State private var hovered = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var countdownDate = Date.now
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 15)) { timeline in
-            let now = (date ?? timeline.date).timeIntervalSince1970
-            let cooling = account.cooling(at: now)
-            Button(action: select) {
-                HStack(spacing: 8) {
-                    rowIdentity
-                    Spacer(minLength: 1)
-                    if active {
-                        Label(language[.active], systemImage: "checkmark")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color.accentColor)
-                            .fixedSize()
-                    } else if cooling, let until = account.cooldownUntil {
-                        let remaining = LocalizedText.cooldownCountdown(until - now)
-                        Text(remaining.localized(in: language))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .font(.system(size: 10, weight: .medium))
-                            .accessibilityLabel(LocalizedText.cooldownEndsIn(remaining).localized(in: language))
-                            .fixedSize()
-                        dot(.orange)
-                    } else {
-                        dot(.green).accessibilityLabel(language[.available])
-                    }
+        let now = (date ?? countdownDate).timeIntervalSince1970
+        let cooling = account.cooling(at: now)
+        Button(action: select) {
+            HStack(spacing: 8) {
+                rowIdentity
+                Spacer(minLength: 1)
+                if active {
+                    Label(language[.active], systemImage: "checkmark")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                        .fixedSize()
+                } else if cooling, let until = account.cooldownUntil {
+                    let remaining = LocalizedText.cooldownCountdown(until - now)
+                    Text(remaining.localized(in: language))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 10, weight: .medium))
+                        .accessibilityLabel(LocalizedText.cooldownEndsIn(remaining).localized(in: language))
+                        .fixedSize()
+                    dot(.orange)
+                } else {
+                    dot(.green).accessibilityLabel(language[.available])
                 }
-                .padding(.horizontal, 10)
-                .frame(height: 43)
-                .frame(maxWidth: .infinity)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .disabled(busy)
-            .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(active ? Color.accentColor.opacity(hovered ? 0.15 : 0.10)
-                          : Color.primary.opacity(hovered ? 0.065 : 0))
-            }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.13), value: hovered)
-            .onHover { hovered = $0 }
-            .contextMenu {
-                if account.cooldownUntil != nil { Button(language[.clearCooldown]) { cooldown(false) } }
-                if !cooling { Button(language[.markCooldown]) { cooldown(true) } }
-                Button(language[.renameAlias]) { rename() }
-                Divider()
-                Button(language[.removeAccount], role: .destructive) { remove() }
+            .padding(.horizontal, 10)
+            .frame(height: 43)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(active ? Color.accentColor.opacity(hovered ? 0.15 : 0.10)
+                      : Color.primary.opacity(hovered ? 0.065 : 0))
+        }
+        .onHover { hovered = $0 }
+        .contextMenu {
+            if account.cooldownUntil != nil { Button(language[.clearCooldown]) { cooldown(false) } }
+            if !cooling { Button(language[.markCooldown]) { cooldown(true) } }
+            Button(language[.renameAlias]) { rename() }
+            Divider()
+            Button(language[.removeAccount], role: .destructive) { remove() }
+        }
+        .task(id: account.cooldownUntil) {
+            guard date == nil, let until = account.cooldownUntil else { return }
+            countdownDate = .now
+            while !Task.isCancelled {
+                let remaining = until - countdownDate.timeIntervalSince1970
+                guard remaining > 0 else { return }
+                do { try await Task.sleep(for: .seconds(min(15, remaining))) }
+                catch { return }
+                countdownDate = .now
             }
         }
     }

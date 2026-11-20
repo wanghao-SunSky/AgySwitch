@@ -5,14 +5,26 @@ import XCTest
 final class MemoryKeychain: Keychain {
     private var items: [String: Data] = [:]
     var replaceNextActiveWrite = false
+    var skipSnapshotWrites = false
+    var afterSnapshotWrite: (() throws -> Void)?
+    var beforeClearingActiveLogin: (() throws -> Void)?
+    var keepActiveLoginOnClear = false
     var activeWrites = 0
+    private(set) var activeReads = 0
+    private(set) var vaultReads = 0
+    private(set) var vaultWrites = 0
+    private(set) var activeClears = 0
 
     var active: Data? {
         get { items["gemini/antigravity"] }
         set { items["gemini/antigravity"] = newValue }
     }
 
-    func read(service: String, account: String) throws -> Data? { items[service + "/" + account] }
+    func read(service: String, account: String) throws -> Data? {
+        if service == MacKeychain.activeService { activeReads += 1 }
+        if service == MacKeychain.vaultService { vaultReads += 1 }
+        return items[service + "/" + account]
+    }
 
     func write(service: String, account: String, raw: Data) throws {
         if service == "gemini" {
@@ -22,10 +34,23 @@ final class MemoryKeychain: Keychain {
                 return
             }
         }
-        items[service + "/" + account] = raw
+        if service == "agy-acct-vault" {
+            vaultWrites += 1
+            guard !skipSnapshotWrites else { return }
+            items[service + "/" + account] = raw
+            try afterSnapshotWrite?()
+        } else {
+            items[service + "/" + account] = raw
+        }
     }
 
     func delete(service: String, account: String) throws { items.removeValue(forKey: service + "/" + account) }
+
+    func clearActiveLogin() throws {
+        activeClears += 1
+        try beforeClearingActiveLogin?()
+        if !keepActiveLoginOnClear { active = nil }
+    }
 }
 
 func credential(_ email: String, marker: String = "synthetic-marker") throws -> Data {

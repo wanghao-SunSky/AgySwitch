@@ -5,20 +5,28 @@ import SwiftUI
 import UserNotifications
 
 @MainActor
-final class ApplicationDelegate: NSObject, NSApplicationDelegate {
+final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let model = MenuModel()
+    private let clientReloader = ClientReloader(processes: LocalProcessControl(), desktop: WorkspaceDesktopControl())
+    private let autoReloadKey = "autoReloadClientsOnSwitch"
+    private var clientReloadTask: Task<Void, Never>?
     private let work = LocalWork()
     private let preferences = UserDefaults.standard
     private let loginItem = LoginItem()
     private let popover = NSPopover()
     private var statusItem: NSStatusItem?
     private var feedbackExpiry: DispatchWorkItem?
+    private var reloading = false
+    private var refreshFeedbackRequested = false
+    private var hasReadPool = false
+    private var pendingOpen = false
     private var language: DisplayLanguage { model.displayLanguage }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        preferences.register(defaults: ["autoWatchEnabled": false, "defaultCooldownSeconds": 18_000,
+        preferences.register(defaults: [autoReloadKey: false, "autoWatchEnabled": false, "defaultCooldownSeconds": 18_000,
                                         AppLanguage.preferenceKey: AppLanguage.system.rawValue])
         model.language = preferences.string(forKey: AppLanguage.preferenceKey).flatMap(AppLanguage.init(rawValue:)) ?? .system
+        model.autoReload = preferences.bool(forKey: autoReloadKey)
         model.automatic = preferences.bool(forKey: "autoWatchEnabled")
         let cooldown = preferences.integer(forKey: "defaultCooldownSeconds")
         if [18_000, 10_800, 3_600].contains(cooldown) { model.cooldown = cooldown }
@@ -41,14 +49,11 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
         updateTooltip()
         popover.behavior = .transient
-        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let host = NSHostingController(rootView: MenuPopoverView(model: model) { [weak self] height in
-            guard height > 0 else { return }
-            self?.popover.contentSize = NSSize(width: MenuPopoverView.width, height: ceil(height))
-        })
+        popover.animates = false
+        popover.delegate = self
+        let host = NSHostingController(rootView: MenuPopoverView(model: model))
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
-        popover.contentSize = host.view.fittingSize
 
         work.configure(automatic: model.automatic, cooldown: model.cooldown)
         reload()
@@ -65,22 +70,48 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func togglePopover() {
-        guard let button = statusItem?.button else { return }
         if popover.isShown {
             popover.performClose(nil)
+        } else if pendingOpen {
+            pendingOpen = false
+        } else if !model.busy && (!hasReadPool || model.signInStarted) {
+            // Present the first frame with the actual login, including when returning from Terminal.
+            pendingOpen = true
+            reload()
         } else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            NSApp.activate(ignoringOtherApps: true)
-            popover.contentViewController?.view.window?.makeKey()
+            presentPopover()
             reload()
         }
     }
 
+    private func presentPopover() {
+        guard let button = statusItem?.button else { return }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        NSApp.activate(ignoringOtherApps: true)
+        popover.contentViewController?.view.window?.makeKey()
+    }
+
+    func popoverDidShow(_ notification: Notification) {
+        model.setPopoverVisible(true)
+    }
+
+    func popoverWillClose(_ notification: Notification) {
+        model.setPopoverVisible(false)
+    }
+
     private func handle(_ action: MenuAction) {
         switch action {
+        case .setAutoReload(let enabled):
+            model.autoReload = enabled
+            preferences.set(enabled, forKey: autoReloadKey)
+        case .reloadClients:
+            guard !model.busy else { return }
+            reloadClients()
         case .refresh: reload(showFeedback: true)
+        case .checkLogin: reload()
+        case .beginAddAccount: beginAddAccount()
         case .inspect:
-            run { try $0.inspect(logDirectory: LocalWork.logDirectory) } message: { result in
+            run({ try $0.inspect(logDirectory: LocalWork.logDirectory) }, snapshot: \.snapshot) { result in
                 return MenuFeedback(result.invalidVaultCount == 0 ? .info : .warning,
                                     .statusTitle(signedIn: result.hasLogin, accountCount: result.accountCount),
                                     detail: .statusDetail(logsReadable: result.logsReadable,
@@ -104,18 +135,21 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         case .quit:
             NSApp.terminate(nil)
         case let .save(alias, email):
-            run { try $0.save(alias: alias, expectedEmail: email) } message: { MenuFeedback(.success, .saved($0.alias)) }
+            run({ try $0.save(alias: alias, expectedEmail: email).snapshot }, snapshot: \.self) { [weak self] _ in
+                self?.model.finishSignIn()
+                return MenuFeedback(.success, .saved(alias))
+            }
         case let .select(id):
-            run(mutatingLogin: true, { try $0.switchTo(accountID: id) }, message: switchFeedback)
+            switchAccount { try $0.switchTo(accountID: id) }
         case .next:
-            run(mutatingLogin: true, { try $0.next() }, message: switchFeedback)
+            switchAccount { try $0.next() }
         case let .rename(id, alias):
-            run { try $0.rename(accountID: id, alias: alias) } message: { _ in MenuFeedback(.success, .aliasUpdated) }
+            run({ try $0.rename(accountID: id, alias: alias) }, snapshot: \.self) { _ in MenuFeedback(.success, .aliasUpdated) }
         case let .remove(id):
-            run { try $0.remove(accountID: id) } message: { _ in MenuFeedback(.success, .accountRemoved) }
+            run({ try $0.remove(accountID: id) }, snapshot: \.self) { _ in MenuFeedback(.success, .accountRemoved) }
         case let .cooldown(id, mark):
             let seconds = mark ? Double(model.cooldown) : nil
-            run { try $0.cooldown(accountID: id, seconds: seconds) } message: { _ in
+            run({ try $0.cooldown(accountID: id, seconds: seconds) }, snapshot: \.self) { _ in
                 MenuFeedback(.success, mark ? .cooldownMarked : .cooldownCleared)
             }
         case let .setAutomatic(enabled):
@@ -142,9 +176,13 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             model.listening = model.automatic && listening
             updateTooltip()
         case let .switched(result):
-            if result.changed { notify(alias: result.target) }
-            show(switchFeedback(result))
-            reload()
+            if result.changed && model.autoReload {
+                reloadClients(switchedTo: result.target, notifyOnCompletion: true)
+            } else {
+                if result.changed { notify(alias: result.target, body: language[.reopenSession]) }
+                show(.switchResult(target: result.target, changed: result.changed))
+            }
+            applySnapshot(result.snapshot)
         case let .warning(error):
             if model.automatic { show(MenuFeedback(.warning, error.text)) }
             reload()
@@ -152,7 +190,8 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateTooltip() {
-        let current = model.pool.registry.accounts.first { $0.accountID == model.pool.activeID }?.alias
+        let current = model.refreshError?.text.localized(in: language)
+            ?? model.pool.registry.accounts.first { $0.accountID == model.pool.activeID }?.alias
             ?? model.pool.currentEmail ?? language[.signedOut]
         let monitoring = model.listening ? [language[.monitoring]] : []
         statusItem?.button?.toolTip = (["AgySwitch", current] + monitoring).joined(separator: " · ")
@@ -160,41 +199,153 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
 
     private func reload(showFeedback: Bool = false) {
         guard !model.busy else { return }
-        model.busy = true
+        refreshFeedbackRequested = refreshFeedbackRequested || showFeedback
+        guard !reloading else { return }
+        reloading = true
         work.refresh { [weak self] result in
             guard let self else { return }
-            model.busy = false
+            let showFeedback = refreshFeedbackRequested
+            refreshFeedbackRequested = false
+            reloading = false
+            hasReadPool = true
             switch result {
             case let .success(snapshot):
-                model.pool = snapshot
-                updateTooltip()
+                applySnapshot(snapshot)
                 if showFeedback { show(MenuFeedback(.success, .poolRefreshed)) }
             case let .failure(error):
-                show(MenuFeedback(.warning, AppError(redacting: error).text))
-            }
-        }
-    }
-
-    private func run<T>(mutatingLogin: Bool = false, _ action: @escaping (AccountPool) throws -> T,
-                        message: @escaping (T) -> MenuFeedback) {
-        guard !model.busy else { return }
-        model.busy = true
-        work.perform(mutatingLogin: mutatingLogin, action) { [weak self] result, snapshot in
-            guard let self else { return }
-            model.busy = false
-            if case let .success(pool) = snapshot {
-                model.pool = pool
+                model.reportRefreshFailure(error)
                 updateTooltip()
             }
-            switch result {
-            case let .success(value): show(message(value))
-            case let .failure(error): show(MenuFeedback(.warning, AppError(redacting: error).text))
+            if pendingOpen {
+                pendingOpen = false
+                presentPopover()
             }
         }
     }
 
-    private func switchFeedback(_ outcome: SwitchOutcome) -> MenuFeedback {
-        MenuFeedback.switchResult(target: outcome.target, changed: outcome.changed)
+    private func beginAddAccount() {
+        guard !model.busy else { return }
+        guard let executable = Self.agyExecutable() else {
+            show(MenuFeedback(.warning, AppError.agyNotFound.text))
+            return
+        }
+        let workspace = NSWorkspace.shared
+        guard let terminal = workspace.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else {
+            show(MenuFeedback(.warning, AppError.terminalLaunch.text))
+            return
+        }
+        let script: URL
+        do { script = try TerminalCommand.create(for: executable) }
+        catch {
+            show(MenuFeedback(.warning, AppError.terminalLaunch.text))
+            return
+        }
+        let reopening = model.signInStarted
+        model.accountActionInProgress = true
+        work.perform({ pool in
+            try reopening ? pool.snapshot() : pool.beginAddAccount()
+        }, changedLogin: { _ in !reopening }) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case let .success(snapshot):
+                applySnapshot(snapshot)
+                if reopening, snapshot.currentEmail != nil {
+                    try? FileManager.default.removeItem(at: script)
+                    model.accountActionInProgress = false
+                    return
+                }
+            case let .failure(error):
+                try? FileManager.default.removeItem(at: script)
+                model.accountActionInProgress = false
+                show(MenuFeedback(.warning, AppError(redacting: error).text))
+                reload()
+                return
+            }
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            workspace.open([script], withApplicationAt: terminal, configuration: configuration) { [weak self] _, error in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    model.accountActionInProgress = false
+                    if error == nil {
+                        feedbackExpiry?.cancel()
+                        model.feedback = nil
+                        model.signInStarted = true
+                        if popover.isShown { reload() }
+                    } else {
+                        try? FileManager.default.removeItem(at: script)
+                        show(MenuFeedback(.warning, AppError.terminalLaunch.text))
+                    }
+                }
+            }
+        }
+    }
+
+    private static func agyExecutable() -> URL? {
+        let files = FileManager.default
+        let installerDirectory = files.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        let directories = [installerDirectory, "/opt/homebrew/bin", "/usr/local/bin"] + path.split(separator: ":").map(String.init)
+        return directories.lazy.filter { $0.hasPrefix("/") }.map {
+            URL(fileURLWithPath: $0, isDirectory: true).appendingPathComponent("agy")
+        }.first { url in
+            var isDirectory: ObjCBool = false
+            return files.fileExists(atPath: url.path, isDirectory: &isDirectory)
+                && !isDirectory.boolValue && files.isExecutableFile(atPath: url.path)
+        }
+    }
+
+    private func applySnapshot(_ snapshot: PoolSnapshot) {
+        let hadError = model.refreshError != nil
+        if model.updatePool(snapshot) || hadError { updateTooltip() }
+    }
+
+    private func run<T>(_ action: @escaping (AccountPool) throws -> T, snapshot: KeyPath<T, PoolSnapshot>,
+                        changedLogin: @escaping (T) -> Bool = { _ in false },
+                        message: @escaping (T) -> MenuFeedback?) {
+        guard !model.busy else { return }
+        model.accountActionInProgress = true
+        work.perform(action, changedLogin: changedLogin) { [weak self] result in
+            guard let self else { return }
+            model.accountActionInProgress = false
+            switch result {
+            case let .success(value):
+                if let feedback = message(value) { show(feedback) }
+                applySnapshot(value[keyPath: snapshot])
+            case let .failure(error):
+                show(MenuFeedback(.warning, AppError(redacting: error).text))
+                reload() // An operation can fail after a verified Keychain write.
+            }
+        }
+    }
+
+    private func switchAccount(_ action: @escaping (AccountPool) throws -> SwitchOutcome) {
+        run(action, snapshot: \.snapshot, changedLogin: \.changed) { [self] outcome in
+            model.finishSignIn()
+            if outcome.changed && model.autoReload {
+                reloadClients(switchedTo: outcome.target)
+                return nil
+            }
+            return .switchResult(target: outcome.target, changed: outcome.changed, offersReload: !model.autoReload)
+        }
+    }
+
+    private func reloadClients(switchedTo alias: String? = nil, notifyOnCompletion: Bool = false) {
+        // A watcher event can arrive while a menu-initiated reload is waiting for desktop exit.
+        let previous = clientReloadTask
+        model.pendingClientReloads += 1
+        feedbackExpiry?.cancel()
+        model.feedback = MenuFeedback(.info, .reloadingClients)
+        clientReloadTask = Task {
+            await previous?.value
+            let outcome = await clientReloader.reloadClients()
+            let detail = LocalizedText.reloadSummary(outcome)
+            show(MenuFeedback(outcome.hasWarning ? .warning : .info,
+                              alias.map(LocalizedText.switched) ?? AppLabel.reloadResult.text, detail: detail))
+            if notifyOnCompletion, let alias { notify(alias: alias, body: detail.localized(in: language)) }
+            model.pendingClientReloads -= 1
+            if model.pendingClientReloads == 0 { clientReloadTask = nil }
+        }
     }
 
     private func show(_ feedback: MenuFeedback) {
@@ -202,12 +353,11 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         model.feedback = feedback
         let clear = DispatchWorkItem { [weak self] in self?.model.feedback = nil }
         feedbackExpiry = clear
-        DispatchQueue.main.asyncAfter(deadline: .now() + (feedback.kind == .warning ? 8 : 5), execute: clear)
+        DispatchQueue.main.asyncAfter(deadline: .now() + (feedback.offersReload ? 10 : feedback.kind == .warning ? 8 : 5), execute: clear)
     }
 
-    private func notify(alias: String) {
+    private func notify(alias: String, body: String) {
         let title = LocalizedText.switched(alias).localized(in: language)
-        let body = language[.reopenSession]
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body

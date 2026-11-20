@@ -8,6 +8,7 @@ public enum AppError: CaseIterable, LocalizedError {
     case signInRequired, unsavedAccount, activeChanged, accountMissing, invalidAlias, duplicateAlias
     case emptyPool, noOtherAccounts, allOthersCooling, missingSnapshot, snapshotMismatch
     case switchVerification, switchMetadataWrite, credentialRefreshing, localOperationFailed
+    case activeLoginDelete, activeLoginVerification, agyNotFound, terminalLaunch
 
     public init(redacting error: Error) {
         self = error as? Self ?? .localOperationFailed
@@ -18,72 +19,84 @@ public enum AppError: CaseIterable, LocalizedError {
     public var text: LocalizedText {
         switch self {
         case .invalidCredential:
-            return .init("The agy credential has an invalid format or fields.", "agy 凭证格式或字段无效。")
+            return .init("The agy credential has an invalid format or fields.", "无法识别 agy 的登录信息。")
         case .invalidRegistry:
-            return .init("registry.json is invalid. Check the account pool metadata.", "registry.json 格式无效，请检查账号池元数据。")
+            return .init("registry.json is invalid. Check the account pool metadata.", "账号列表文件 registry.json 有误，请检查文件内容。")
         case .insecureDirectory:
             return .init("You must own the account pool and vault folders. Set their permissions to 0700.",
-                         "账号池或 vault 目录必须归当前用户所有，且权限为 0700。")
+                         "账号数据文件夹必须归当前用户所有，且仅允许当前用户访问（权限 0700）。")
         case .insecureFile:
             return .init("You must own the account pool and vault files. Set their permissions to 0600.",
-                         "账号池或 vault 文件必须归当前用户所有，且权限为 0600。")
+                         "账号数据文件必须归当前用户所有，且仅允许当前用户读写（权限 0600）。")
         case .fileIO:
             return .init("File operation failed. Check folder permissions and free disk space.", "本地文件操作失败，请检查目录权限与磁盘空间。")
         case .keychainUnavailable:
-            return .init("Couldn’t run security, or the login Keychain timed out.", "无法执行 security，或登录钥匙串响应超时。")
+            return .init("Couldn’t run security, or the login Keychain timed out.", "系统钥匙串暂时没有响应，请稍后重试。")
         case .keychainRead:
             return .init("Couldn’t read the login Keychain. Check that it’s unlocked and accessible.", "读取登录钥匙串失败，请检查解锁状态及访问权限。")
         case .keychainWrite:
             return .init("Couldn’t write to the login Keychain. Check that it’s unlocked and accessible.", "写入登录钥匙串失败，请检查解锁状态及访问权限。")
         case .keychainPath:
-            return .init("The login Keychain path is incompatible with security’s interactive mode.", "登录钥匙串路径不适用于 security 交互模式。")
+            return .init("The login Keychain path is incompatible with security’s interactive mode.", "无法从当前位置打开登录钥匙串。")
         case .credentialTooLong:
-            return .init("The credential exceeds the line limit in security’s interactive mode.", "凭证超过 security 交互模式单行上限。")
+            return .init("The credential exceeds the line limit in security’s interactive mode.", "账号登录信息太长，无法写入钥匙串。")
         case .keychainHexCheck:
-            return .init("Couldn’t verify the Keychain credential’s hex encoding.", "无法核对钥匙串凭证的十六进制格式。")
+            return .init("Couldn’t verify the Keychain credential’s hex encoding.", "无法确认钥匙串里的登录信息。")
         case .keychainHexFormat:
-            return .init("Unrecognized hex encoding for the Keychain credential.", "无法识别钥匙串凭证的十六进制格式。")
+            return .init("Unrecognized hex encoding for the Keychain credential.", "无法识别钥匙串里的登录信息。")
         case .protectedKeychainEntry:
-            return .init("Only saved account snapshots can be deleted.", "只能删除账号池快照。")
+            return .init("Only saved account snapshots can be deleted.", "此操作只能移除已保存的登录信息。")
         case .keychainDelete:
-            return .init("Couldn’t delete the saved snapshot. Check Keychain access.", "删除凭证快照失败，请检查钥匙串权限。")
+            return .init("Couldn’t delete the saved snapshot. Check Keychain access.", "无法移除已保存的登录信息，请检查钥匙串权限。")
         case .snapshotVerification:
-            return .init("Couldn’t verify the saved credential snapshot.", "凭证快照回读校验失败。")
+            return .init("Couldn’t verify the saved credential snapshot.", "无法确认账号已保存，请重试。")
         case .snapshotDeletionVerification:
-            return .init("The credential snapshot is still present after deletion.", "删除凭证快照后回读仍可见。")
+            return .init("The credential snapshot is still present after deletion.", "保存的登录信息仍在，请重试移除操作。")
         case .watchUnreadable:
-            return .init("The logs or Keychain are temporarily unreadable.", "本轮日志或钥匙串暂不可读。")
+            return .init("The logs or Keychain are temporarily unreadable.", "暂时无法读取日志或钥匙串。")
         case .signInRequired:
             return .init("Sign in to agy before saving your account.", "当前 agy 未登录，请先完成 agy 登录。")
         case .unsavedAccount:
-            return .init("Save your current account before switching.", "当前账号未纳管，请先保存当前账号。")
+            return .init("Save your current account before switching.", "当前账号尚未保存，请先保存后再切换。")
         case .activeChanged:
             return .init("Your agy login changed. Refresh and try again.", "当前 agy 登录已变化，请刷新后重试。")
         case .accountMissing:
-            return .init("That account was removed. Refresh and try again.", "账号已从账号池移除，请刷新后重试。")
+            return .init("That account was removed. Refresh and try again.", "这个账号已被移除，请刷新列表。")
         case .invalidAlias:
             return .init("Start the alias with a letter or number. Use up to 48 letters, numbers, dots, underscores, or hyphens.",
                          "别名须以字母或数字开头，最多 48 个字符，可包含 . _ -。")
         case .duplicateAlias:
             return .init("Another account already uses that alias.", "该别名已被其他账号使用。")
         case .emptyPool:
-            return .init("No saved accounts. Save your current account first.", "账号池为空，请先保存当前账号。")
+            return .init("No saved accounts. Save your current account first.", "还没有保存的账号，请先保存当前账号。")
         case .noOtherAccounts:
-            return .init("There are no other accounts to switch to.", "账号池没有其他账号可切换。")
+            return .init("There are no other accounts to switch to.", "还没有其他账号可以切换。")
         case .allOthersCooling:
             return .init("All other accounts are on cooldown. Try again when one is available.", "其余账号都在冷却，请等到期后再切换。")
         case .missingSnapshot:
-            return .init("The target account has no saved credentials. Sign in to it and save it again.", "目标账号缺少凭证快照，请重新登录该账号后保存。")
+            return .init("The target account has no saved credentials. Sign in to it and save it again.", "找不到这个账号的登录信息，请重新登录后保存。")
         case .snapshotMismatch:
-            return .init("The saved credentials don’t match the target account.", "目标凭证快照与账号池记录不匹配。")
+            return .init("The saved credentials don’t match the target account.", "保存的登录信息与要切换的账号不符。")
         case .switchVerification:
-            return .init("Couldn’t verify the switch in the Keychain. Refresh to check the active account.", "切换后钥匙串回读不一致，请刷新确认当前账号。")
+            return .init("Couldn’t verify the switch in the Keychain. Refresh to check the active account.", "无法确认切换成功，请刷新查看当前账号。")
         case .switchMetadataWrite:
-            return .init("Switched accounts, but couldn’t update the account’s last-used record.", "钥匙串已切换并通过回读，账号池使用记录写入失败。")
+            return .init("Switched accounts, but couldn’t update the account’s last-used record.", "已切换账号，上次使用时间未能更新。")
         case .credentialRefreshing:
-            return .init("agy is refreshing its credentials. Try again shortly.", "当前 agy 凭证正在刷新，请稍后重试。")
+            return .init("agy is refreshing its credentials. Try again shortly.", "agy 正在更新登录信息，请稍后重试。")
         case .localOperationFailed:
             return .init("Local operation failed. Check access permissions and try again.", "本地操作失败，请检查访问权限后重试。")
+        case .activeLoginDelete:
+            return .init("Couldn’t sign out of the current agy account. Check Keychain access and try again.",
+                         "无法退出当前 agy 账号，请检查钥匙串权限后重试。")
+        case .activeLoginVerification:
+            return .init("The current agy account is still signed in. Close any running agy sessions and try again.",
+                         "agy 仍处于登录状态，请退出正在运行的 agy 后重试。")
+        case .agyNotFound:
+            return .init("Couldn’t find agy. Install the Antigravity CLI and try again.",
+                         "找不到 agy，请安装 Antigravity 命令行工具后重试。")
+        case .terminalLaunch:
+            return .init("Couldn’t start agy in Terminal. Open Terminal and run agy to sign in.",
+                         "未能在终端启动 agy。可以打开终端，手动运行 agy 登录。")
         }
     }
 }

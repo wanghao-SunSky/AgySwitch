@@ -13,6 +13,7 @@ let package = Package(
         .target(name: "AgySwitchUI", dependencies: ["AgySwitchCore"]),
         .executableTarget(name: "AgySwitch", dependencies: ["AgySwitchCore", "AgySwitchUI"]),
         .executableTarget(name: "AgySwitchPreview", dependencies: ["AgySwitchUI"]),
-        .testTarget(name: "AgySwitchCoreTests", dependencies: ["AgySwitchCore"])
+        .testTarget(name: "AgySwitchCoreTests", dependencies: ["AgySwitchCore"]),
+        .testTarget(name: "AgySwitchUITests", dependencies: ["AgySwitchCore", "AgySwitchUI"])
     ]
 )
