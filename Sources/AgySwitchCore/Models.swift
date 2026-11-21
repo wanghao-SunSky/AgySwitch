@@ -5,6 +5,14 @@ public struct Identity: Equatable {
     public let authMethod: String
 
     public static func parse(_ raw: Data) throws -> Identity {
+        let object = try credentialObject(raw)
+        guard let email = object["id_token_email"] as? String, Validation.emailIsValid(email),
+              let token = object["token"], !(token is NSNull) else { throw invalid }
+        let method = (object["auth_method"] as? String).flatMap { Validation.authMethod.matchesWhole($0) ? $0 : nil }
+        return Identity(email: email, authMethod: method ?? "oauth")
+    }
+
+    static func credentialObject(_ raw: Data) throws -> [String: Any] {
         let prefix = Data("go-keyring-base64:".utf8)
         var bytes = raw
         if bytes.starts(with: [48, 120]) || bytes.starts(with: [48, 88]) {
@@ -19,14 +27,8 @@ public struct Identity: Equatable {
             bytes = decoded
         }
         // Python json.loads(bytes) also accepts a UTF-8 BOM and UTF-16/32.
-        guard let object = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
-              let email = object["id_token_email"] as? String, Validation.emailIsValid(email),
-              let token = object["token"], !(token is NSNull) else {
-            throw invalid
-        }
-        // Only the registry's short method label is normalized. The vault stores raw unchanged.
-        let method = (object["auth_method"] as? String).flatMap { Validation.authMethod.matchesWhole($0) ? $0 : nil }
-        return Identity(email: email, authMethod: method ?? "oauth")
+        guard let object = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] else { throw invalid }
+        return object
     }
 
     private static let invalid = AppError.invalidCredential

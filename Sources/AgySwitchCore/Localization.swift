@@ -26,6 +26,11 @@ public struct LocalizedText: Equatable {
         let minutes = total / 60
         if minutes < 60 { return Self("\(minutes)m", "\(minutes) 分钟") }
         let hours = minutes / 60
+        if hours >= 24 {
+            let days = hours / 24, rest = hours % 24
+            return rest == 0 ? Self("\(days)d", "\(days) 天")
+                : Self("\(days)d \(rest)h", "\(days) 天 \(rest) 小时")
+        }
         let remainder = minutes % 60
         if remainder == 0 { return Self("\(hours)h", "\(hours) 小时") }
         return Self("\(hours)h \(remainder)m", "\(hours) 小时 \(remainder) 分钟")
@@ -68,6 +73,7 @@ public struct LocalizedText: Equatable {
         if result.unfinishedProcesses > 0 {
             parts.append(Self("Still running (\(result.unfinishedProcesses))", "仍在运行 (\(result.unfinishedProcesses))"))
         }
+        if result.credentialVerificationFailed { parts.append(Self("Login verification failed", "钥匙串账号复核失败")) }
         if result.processScanFailed { parts.append(Self("Couldn’t check agy processes", "无法检查 agy 进程")) }
         guard !parts.isEmpty else { return Self("No running clients found", "未检测到运行中的客户端") }
         return Self(parts.map(\.english).joined(separator: " · "), parts.map(\.chinese).joined(separator: " · "))
@@ -93,6 +99,8 @@ public struct LocalizedText: Equatable {
 
 public enum AppLabel: CaseIterable {
     case autoReload, reloadMenu, reloadClients, reloadingClients, reloadResult
+    case fiveHourRemaining, weeklyRemaining
+    case quotaOnHover, loadingQuota, quotaFailed, quotaExpired, resetsIn
     case language, followSystem
     case listening, listenerStopped, refresh
     case enableLoginItem, disableLoginItem, openLogs, inspect, quit, more
@@ -108,6 +116,13 @@ public enum AppLabel: CaseIterable {
 
     public var text: LocalizedText {
         switch self {
+        case .fiveHourRemaining: return .init("5h remaining", "5 小时剩余")
+        case .weeklyRemaining: return .init("Weekly remaining", "周额度剩余")
+        case .quotaOnHover: return .init("Quota on Hover", "悬停查看额度")
+        case .loadingQuota: return .init("Loading quota…", "正在获取额度…")
+        case .quotaFailed: return .init("Quota unavailable", "暂时无法获取额度")
+        case .quotaExpired: return .init("Open agy with this account to renew its login", "请用此账号打开 agy 以续期登录")
+        case .resetsIn: return .init("Resets in", "重置剩余")
         case .autoReload: return .init("Auto-Reload Clients on Switch", "切号后自动重载客户端")
         case .reloadMenu: return .init("Reload agy & Desktop", "重载 agy 与桌面版")
         case .reloadClients: return .init("Reload Clients", "立即重载")

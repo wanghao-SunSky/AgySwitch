@@ -25,6 +25,14 @@ public struct SwitchOutcome: Equatable {
     public let target: String
     public let changed: Bool
     public let snapshot: PoolSnapshot
+    public let reloadLogin: ReloadLogin?
+}
+
+public struct ReloadLogin: Equatable {
+    fileprivate let id: String
+    fileprivate let lastUsedAt: Double
+    fileprivate let bytes: Data
+    fileprivate let previousEmail: String?
 }
 
 public struct PoolCheck {
@@ -53,6 +61,68 @@ public final class AccountPool {
     public func snapshot() throws -> PoolSnapshot {
         try store.locked { registry in
             PoolSnapshot(registry: registry, currentEmail: try active()?.identity.email)
+        }
+    }
+
+    public func quotaAccessToken(accountID: String) throws -> String {
+        try store.locked { registry in
+            let account = registry.accounts[try index(for: accountID, in: registry)]
+            let raw: Data
+            if let login = try active(), login.identity.email.caseInsensitiveCompare(account.email) == .orderedSame {
+                raw = login.raw
+            } else {
+                guard let saved = try vault.read(account) else { throw AppError.missingSnapshot }
+                raw = saved
+            }
+            guard try Identity.parse(raw).email.caseInsensitiveCompare(account.email) == .orderedSame,
+                  let token = try Identity.credentialObject(raw)["token"] as? [String: Any],
+                  let bearer = token["access_token"] as? String, !bearer.isEmpty else { throw AppError.invalidCredential }
+            return bearer
+        }
+    }
+
+    // agy owns the OAuth client registration. Its read-only model listing can renew
+    // the selected login. Hold the same lock as switchTo until the helper has exited.
+    public func renewActiveQuotaToken(accountID: String, rejected: String, renew: () throws -> Void) throws -> String {
+        try store.locked(write: true) { registry in
+            let account = registry.accounts[try index(for: accountID, in: registry)]
+            func bearer() throws -> String {
+                guard let login = try active(), login.identity.email.caseInsensitiveCompare(account.email) == .orderedSame,
+                      let fields = try Identity.credentialObject(login.raw)["token"] as? [String: Any],
+                      let token = fields["access_token"] as? String, !token.isEmpty else { throw QuotaError.expired }
+                return token
+            }
+            let current = try bearer()
+            if current != rejected { return current }
+            try renew()
+            let refreshed = try bearer()
+            guard refreshed != rejected else { throw QuotaError.expired }
+            return refreshed
+        }
+    }
+
+    public func currentReloadLogin() throws -> ReloadLogin? {
+        try store.locked { registry in
+            guard let login = try active(), let index = registry.index(email: login.identity.email) else { return nil }
+            let account = registry.accounts[index]
+            return ReloadLogin(id: account.id, lastUsedAt: account.lastUsedAt, bytes: login.raw,
+                               previousEmail: registry.accounts.first { $0.alias == registry.lastActiveAlias }?.email)
+        }
+    }
+
+    public func verifyAfterReload(_ login: ReloadLogin) throws {
+        try store.locked(write: true) { registry in
+            let account = registry.accounts[try index(for: login.id, in: registry)]
+            guard account.lastUsedAt == login.lastUsedAt else { throw AppError.activeChanged }
+            let observed = try readActive()
+            if observed == login.bytes { return }
+            if let observed {
+                let email = try Identity.parse(observed).email.lowercased()
+                guard email == login.previousEmail?.lowercased() || email == account.email.lowercased()
+                else { throw AppError.activeChanged }
+            }
+            try keychain.write(service: MacKeychain.activeService, account: MacKeychain.activeAccount, raw: login.bytes)
+            guard try readActive() == login.bytes else { throw AppError.switchVerification }
         }
     }
 
@@ -287,7 +357,7 @@ public final class AccountPool {
         let current = login.flatMap { registry.index(email: $0.identity.email) }
         if current == target {
             return SwitchOutcome(target: account.alias, changed: false,
-                                 snapshot: PoolSnapshot(registry: registry, currentEmail: login?.identity.email))
+                                 snapshot: PoolSnapshot(registry: registry, currentEmail: login?.identity.email), reloadLogin: nil)
         }
         guard let raw = try vault.read(account) else {
             throw AppError.missingSnapshot
@@ -322,7 +392,8 @@ public final class AccountPool {
             do { try store.save(registry) }
             catch { throw AppError.switchMetadataWrite }
             return SwitchOutcome(target: account.alias, changed: true,
-                                 snapshot: PoolSnapshot(registry: registry, currentEmail: targetIdentity.email))
+                                 snapshot: PoolSnapshot(registry: registry, currentEmail: targetIdentity.email),
+                                 reloadLogin: ReloadLogin(id: account.id, lastUsedAt: now, bytes: raw, previousEmail: expected))
         }
         throw AppError.credentialRefreshing
     }

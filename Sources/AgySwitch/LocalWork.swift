@@ -30,11 +30,38 @@ final class LocalWork {
         }
     }
 
+    func read<T>(_ operation: @escaping (AccountPool) throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            perform(operation, changedLogin: { _ in false }) { continuation.resume(with: $0) }
+        }
+    }
+
     func refresh(_ completion: @escaping (Result<PoolSnapshot, Error>) -> Void) {
         queue.async {
             let snapshot = Result { try self.pool.snapshot() }
             DispatchQueue.main.async { completion(snapshot) }
         }
+    }
+
+    static func renewLogin(using executable: URL) throws {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["models"]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+        try process.run()
+        if finished.wait(timeout: .now() + 8) == .timedOut {
+            if process.isRunning { process.terminate() }
+            if finished.wait(timeout: .now() + 1) == .timedOut, process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+            process.waitUntilExit()
+            throw QuotaError.unavailable
+        }
+        guard process.terminationStatus == 0 else { throw QuotaError.expired }
     }
 
     func configure(automatic: Bool, cooldown: Int) {

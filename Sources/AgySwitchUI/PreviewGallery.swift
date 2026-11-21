@@ -29,6 +29,7 @@ public enum PreviewGallery {
                     cooldownUntil: time + 15_120, exhaustedReason: .resource)
         ]
         let scenarios: [(String, String, MenuFeedback?)] = [
+            ("quota", accounts[0].email, nil),
             ("overview", accounts[0].email, .switchResult(target: accounts[0].alias, changed: true, offersReload: true)),
             ("managed", accounts[0].email, .switchResult(target: accounts[0].alias, changed: true, offersReload: true))
         ]
@@ -42,6 +43,21 @@ public enum PreviewGallery {
                     let model = MenuModel(pool: pool, automatic: true, listening: true,
                                           feedback: feedback, language: language)
                     model.showsAddAccount = name == "managed"
+                    if name == "quota" {
+                        model.hoveredAccount = accounts[1].id
+                        model.quotaDisplay = .ready([
+                            ModelQuota(family: "Gemini Models", buckets: [
+                                .init(window: "weekly", fraction: 0.426, reset: date.addingTimeInterval(522000)),
+                                .init(window: "5h", fraction: 0.184, reset: date.addingTimeInterval(8940))
+                            ]),
+                            ModelQuota(family: "Claude and GPT models", buckets: [
+                                .init(window: "weekly", fraction: 1), .init(window: "5h", fraction: 1)
+                            ]),
+                            ModelQuota(family: "Gemini 4 Argon", buckets: [
+                                .init(window: "weekly", fraction: 0.675, reset: date.addingTimeInterval(522000))
+                            ])
+                        ])
+                    }
                     let view = MenuPopoverView(model: model, referenceDate: date)
                     try render(view, appearance: appearance, scheme: scheme,
                                to: directory.appendingPathComponent("\(name)\(suffix)-\(variant).png"))

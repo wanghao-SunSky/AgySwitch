@@ -3,7 +3,7 @@ import SwiftUI
 
 public enum MenuAction {
     case refresh, checkLogin, inspect, openLogs, toggleLoginItem, quit
-    case reloadClients, setAutoReload(Bool)
+    case reloadClients, setAutoReload(Bool), setQuotaOnHover(Bool)
     case beginAddAccount
     case save(alias: String, email: String)
     case select(String), next, rename(id: String, alias: String), remove(String)
@@ -47,6 +47,49 @@ public struct MenuFeedback: Equatable {
 
 public final class MenuModel: ObservableObject {
     @Published public private(set) var pool: PoolSnapshot
+    public enum QuotaDisplay { case loading, failed(AppLabel), ready([ModelQuota]) }
+    @Published public var quotaDisplay: QuotaDisplay?
+    @Published public var quotaEnabled = true
+    public var loadQuota: (String) async throws -> [ModelQuota] = { _ in throw QuotaError.unavailable }
+    @MainActor private lazy var quotaCache = QuotaCache()
+    @Published var hoveredAccount: String?
+    private var hoverTask: Task<Void, Never>?
+
+    @MainActor public func hover(_ id: String, inside: Bool) {
+        guard inside || hoveredAccount == id else { return }
+        if inside && hoveredAccount == id { return }
+        clearHover()
+        guard inside else { return }
+        hoveredAccount = id
+        guard quotaEnabled else { return }
+        hoverTask = Task {
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+                quotaDisplay = .loading
+                let rows = try await quotaCache.rows(for: id) { [loadQuota] in try await loadQuota(id) }
+                try Task.checkCancellation()
+                quotaDisplay = .ready(rows)
+            } catch {
+                if !Task.isCancelled { quotaDisplay = .failed(error as? QuotaError == .expired ? .quotaExpired : .quotaFailed) }
+            }
+        }
+    }
+
+    @MainActor public func refreshQuota() {
+        let id = hoveredAccount
+        clearHover()
+        quotaCache.invalidate()
+        if let id { hover(id, inside: true) }
+    }
+
+    @MainActor public func clearHover(cancelRequests: Bool = false) {
+        if hoveredAccount != nil { hoveredAccount = nil }
+        hoverTask?.cancel()
+        hoverTask = nil
+        if cancelRequests { quotaCache.cancelRequests() }
+        if quotaDisplay != nil { quotaDisplay = nil }
+    }
+
     @Published public var autoReload = false
     @Published public var automatic: Bool
     @Published public var listening: Bool
@@ -252,37 +295,7 @@ public struct MenuPopoverView: View {
             .buttonStyle(QuietIconStyle())
             .disabled(model.busy)
             .accessibilityLabel(language[.refresh])
-            Menu {
-                Menu(language[.language]) {
-                    Picker(language[.language], selection: Binding(get: { model.language },
-                                                                  set: { model.send(.setLanguage($0)) })) {
-                        ForEach(AppLanguage.allCases, id: \.self) { option in
-                            Text(option.menuTitle(in: language)).tag(option)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
-                }
-                Divider()
-                Toggle(language[.autoReload], isOn: Binding(get: { model.autoReload }, set: { model.send(.setAutoReload($0)) }))
-                Button(language[.reloadMenu]) { model.send(.reloadClients) }
-                    .disabled(model.busy)
-                Divider()
-                Button(language[model.opensAtLogin ? .disableLoginItem : .enableLoginItem]) { model.send(.toggleLoginItem) }
-                Button(language[.openLogs]) { model.send(.openLogs) }
-                Button(language[.inspect]) { model.send(.inspect) }
-                Divider()
-                Button(language[.quit]) { model.send(.quit) }
-                    .keyboardShortcut("q")
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(width: 22, height: 23)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .accessibilityLabel(language[.more])
+            MoreButton(model: model)
         }
         .padding(.leading, 3)
         .frame(height: 26)
@@ -380,10 +393,11 @@ public struct MenuPopoverView: View {
         VStack(spacing: 2) {
             ForEach(accounts) { account in
                 AccountRow(account: account, active: activeID == account.id, date: referenceDate, language: language,
-                           busy: model.busy, select: { model.send(.select(account.id)) },
+                           busy: model.busy, hovered: model.hoveredAccount == account.id, select: { model.send(.select(account.id)) },
                            cooldown: { model.send(.cooldown(id: account.id, mark: $0)) },
                            rename: { begin(.rename(account.id), value: account.alias) },
                            remove: { removal = account })
+                    .onHover { model.hover(account.id, inside: $0) }
                 if editor == .rename(account.id) {
                     aliasEditor(.rename(account.id))
                         .padding(.horizontal, 8)
@@ -468,7 +482,20 @@ public struct MenuPopoverView: View {
 
             // Reserve room for action feedback so its arrival and expiry don't move the controls.
             ZStack(alignment: .topLeading) {
-                if let feedback = model.feedback {
+                if let quota = model.quotaDisplay, !model.busy {
+                    VStack(alignment: .leading, spacing: 4) {
+                        switch quota {
+                        case .loading: Text(language[.loadingQuota])
+                        case let .failed(label): Text(language[label])
+                        case let .ready(rows):
+                            TimelineView(.periodic(from: .now, by: 60)) { tick in
+                                quotaTable(rows, now: referenceDate ?? tick.date)
+                            }
+                        }
+                    }
+                    .font(.system(size: 10)).monospacedDigit().foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                } else if let feedback = model.feedback {
                     ViewThatFits(in: .vertical) {
                         feedbackView(feedback).fixedSize(horizontal: false, vertical: true)
                         ScrollView { feedbackView(feedback) }
@@ -476,7 +503,57 @@ public struct MenuPopoverView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 48, alignment: .topLeading)
+            .frame(height: 116, alignment: .topLeading)
+        }
+    }
+
+    private func quotaTable(_ groups: [ModelQuota], now: Date) -> some View {
+        let windows = Set(groups.flatMap { $0.buckets.map(\.window) })
+        let columns = ["5h", "weekly"].filter(windows.contains) + windows.subtracting(["5h", "weekly"]).sorted()
+        return ScrollView([.vertical, .horizontal]) {
+            Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 4) {
+                GridRow {
+                    Color.clear.frame(width: 85, height: 1)
+                    ForEach(columns, id: \.self) { window in
+                        Text(window == "5h" ? language[.fiveHourRemaining] :
+                                window == "weekly" ? language[.weeklyRemaining] : window)
+                            .frame(width: 86, alignment: .leading)
+                    }
+                }
+                ForEach(groups.indices, id: \.self) { index in
+                    let group = groups[index]
+                    GridRow {
+                        Text(group.family == "Claude and GPT models" ? "Claude / GPT" :
+                                group.family == "Gemini Models" ? "Gemini" : group.family)
+                            .font(.system(size: 11, weight: .medium)).foregroundStyle(.primary)
+                            .frame(width: 85, alignment: .leading)
+                        ForEach(columns, id: \.self) { window in
+                            if let bucket = group.buckets.first(where: { $0.window == window }) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(bucket.fraction.formatted(.percent.precision(.fractionLength(0...1))))
+                                        .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                                        .foregroundStyle(bucket.fraction == 0 ? Color.red :
+                                                            bucket.fraction < 0.25 ? Color.orange : Color.primary)
+                                    if let reset = bucket.reset {
+                                        let seconds = reset.timeIntervalSince(now)
+                                        let duration = seconds <= 0 ? (language == .en ? "0m" : "0 分钟") :
+                                            LocalizedText.cooldownCountdown(seconds).localized(in: language)
+                                        HStack(spacing: 2) {
+                                            Image(systemName: "clock").font(.system(size: 8))
+                                            Text(duration)
+                                        }
+                                        .accessibilityElement(children: .ignore)
+                                        .accessibilityLabel(language[.resetsIn] + " " + duration)
+                                    }
+                                }
+                                .frame(width: 86, height: 28, alignment: .leading)
+                            } else {
+                                Text("—").foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -544,11 +621,84 @@ public struct MenuPopoverView: View {
     }
 }
 
+private struct MoreButton: View {
+    @ObservedObject var model: MenuModel
+    @State private var anchor = NSView()
+    @State private var tracking = false
+
+    private struct Anchor: NSViewRepresentable {
+        let view: NSView
+        func makeNSView(context: Context) -> NSView { view }
+        func updateNSView(_ view: NSView, context: Context) {}
+    }
+
+    private final class Item: NSMenuItem {
+        private let actionBody: () -> Void
+        init(_ title: String, action: @escaping () -> Void) {
+            actionBody = action
+            super.init(title: title, action: #selector(invoke), keyEquivalent: "")
+            target = self
+        }
+        required init(coder: NSCoder) { fatalError("Programmatic menu item") }
+        @objc private func invoke() { actionBody() }
+    }
+
+    var body: some View {
+        Button {
+            let menu = makeMenu()
+            tracking = true
+            DispatchQueue.main.async {
+                menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -3), in: anchor)
+                tracking = false
+            }
+        } label: {
+            Image(systemName: "ellipsis").frame(width: 24, height: 24)
+        }
+        .buttonStyle(QuietIconStyle(tracking: tracking))
+        .background(Anchor(view: anchor))
+        .accessibilityLabel(model.displayLanguage[.more])
+    }
+
+    private func makeMenu() -> NSMenu {
+        let language = model.displayLanguage
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let languages = NSMenu()
+        for option in AppLanguage.allCases {
+            let item = Item(option.menuTitle(in: language)) { model.send(.setLanguage(option)) }
+            item.state = model.language == option ? .on : .off
+            languages.addItem(item)
+        }
+        let languageItem = NSMenuItem(title: language[.language], action: nil, keyEquivalent: "")
+        menu.addItem(languageItem)
+        languageItem.submenu = languages
+        menu.addItem(.separator())
+        func add(_ label: AppLabel, _ action: MenuAction, checked: Bool = false, enabled: Bool = true) {
+            let item = Item(language[label]) { model.send(action) }
+            item.state = checked ? .on : .off
+            item.isEnabled = enabled
+            menu.addItem(item)
+        }
+        add(.quotaOnHover, .setQuotaOnHover(!model.quotaEnabled), checked: model.quotaEnabled)
+        add(.autoReload, .setAutoReload(!model.autoReload), checked: model.autoReload)
+        add(.reloadMenu, .reloadClients, enabled: !model.busy)
+        menu.addItem(.separator())
+        add(model.opensAtLogin ? .disableLoginItem : .enableLoginItem, .toggleLoginItem)
+        add(.openLogs, .openLogs)
+        add(.inspect, .inspect)
+        menu.addItem(.separator())
+        add(.quit, .quit)
+        menu.items.last?.keyEquivalent = "q"
+        return menu
+    }
+}
+
 private struct QuietIconStyle: ButtonStyle {
+    var tracking = false
     @Environment(\.isEnabled) private var enabled
 
     func makeBody(configuration: Configuration) -> some View {
-        Icon(label: configuration.label, pressed: configuration.isPressed, enabled: enabled)
+        Icon(label: configuration.label, pressed: configuration.isPressed || tracking, enabled: enabled)
     }
 
     private struct Icon<Label: View>: View {
@@ -600,18 +750,25 @@ private struct ActionBarStyle: ButtonStyle {
     }
 }
 
+private struct RowPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.background(RoundedRectangle(cornerRadius: 10)
+            .fill(Color.primary.opacity(configuration.isPressed ? 0.09 : 0)))
+    }
+}
+
 private struct AccountRow: View {
     let account: Account
     let active: Bool
     let date: Date?
     let language: DisplayLanguage
     let busy: Bool
+    let hovered: Bool
     let select: () -> Void
     let cooldown: (Bool) -> Void
     let rename: () -> Void
     let remove: () -> Void
 
-    @State private var hovered = false
     @State private var countdownDate = Date.now
 
     var body: some View {
@@ -644,14 +801,13 @@ private struct AccountRow: View {
             .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(RowPressStyle())
         .disabled(busy)
         .background {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(active ? Color.accentColor.opacity(hovered ? 0.15 : 0.10)
                       : Color.primary.opacity(hovered ? 0.065 : 0))
         }
-        .onHover { hovered = $0 }
         .contextMenu {
             if account.cooldownUntil != nil { Button(language[.clearCooldown]) { cooldown(false) } }
             if !cooling { Button(language[.markCooldown]) { cooldown(true) } }

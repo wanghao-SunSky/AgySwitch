@@ -3,6 +3,27 @@ import XCTest
 @testable import AgySwitchCore
 
 final class KeychainTests: XCTestCase {
+    func testLiveKeychainCacheSeesExternalUpdateAndDelete() throws {
+        guard ProcessInfo.processInfo.environment["AGYSWITCH_LIVE_TESTS"] == "1" else {
+            throw XCTSkip("Set AGYSWITCH_LIVE_TESTS=1 to exercise the local login Keychain.")
+        }
+        let service = MacKeychain.vaultService
+        let account = "AgySwitch-test-" + UUID().uuidString
+        let reader = MacKeychain(), writer = MacKeychain()
+        let one = Data("synthetic-one".utf8), two = Data("synthetic-two".utf8)
+        defer { try? writer.delete(service: service, account: account) }
+        try writer.write(service: service, account: account, raw: one)
+        Thread.sleep(forTimeInterval: 2.1)
+        XCTAssertEqual(try reader.read(service: service, account: account), one)
+        let begin = ProcessInfo.processInfo.systemUptime
+        for _ in 0..<10 { XCTAssertEqual(try reader.read(service: service, account: account), one) }
+        print("Warm vault read mean ms", (ProcessInfo.processInfo.systemUptime - begin) * 100)
+        try writer.write(service: service, account: account, raw: two)
+        XCTAssertEqual(try reader.read(service: service, account: account), two)
+        try writer.delete(service: service, account: account)
+        XCTAssertNil(try reader.read(service: service, account: account))
+    }
+
     func testFreshLoginRoundTripsUnchangedAndUsesOnlyRequiredKeychainCalls() throws {
         try withSandbox { home in
             let keychain = MemoryKeychain()

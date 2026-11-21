@@ -15,13 +15,50 @@ struct WorkspaceDesktopControl: DesktopAppControl {
             .first { $0.bundleIdentifier == bundleID && !$0.isTerminated }.map(RunningDesktop.init)
     }
 
+    func hasRemainingClients(at url: URL) -> Bool {
+        if runningApplication(bundleID: ClientReloader.desktopBundleID) != nil { return true }
+        let server = url.appendingPathComponent("Contents/Resources/bin/language_server").path
+        let size = proc_listpids(UInt32(PROC_UID_ONLY), getuid(), nil, 0)
+        guard size > 0 else { return true }
+        var pids = [pid_t](repeating: 0, count: Int(size) / MemoryLayout<pid_t>.stride + 128)
+        let capacity = Int32(pids.count * MemoryLayout<pid_t>.stride)
+        let used = proc_listpids(UInt32(PROC_UID_ONLY), getuid(), &pids, capacity)
+        guard used > 0, used < capacity else { return true }
+        return pids.prefix(Int(used) / MemoryLayout<pid_t>.stride).contains { pid in
+            guard pid > 1 else { return false }
+            var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+            return proc_pidpath(pid, &path, UInt32(path.count)) > 0 && String(cString: path) == server
+        }
+    }
+
     func reopen(at url: URL) async throws {
         guard Bundle(url: url)?.bundleIdentifier == ClientReloader.desktopBundleID else {
             throw CocoaError(.executableLoad)
         }
         let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = false
-        _ = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+        configuration.activates = true
+        // An Electron-based launcher can export this to every child, including LaunchServices.
+        // An empty value leaves Electron in desktop mode.
+        configuration.environment = ["ELECTRON_RUN_AS_NODE": ""]
+        for attempt in 0..<2 {
+            let launched: NSRunningApplication?
+            if attempt == 0 {
+                launched = try? await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+            } else {
+                let opener = Process()
+                opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                opener.arguments = ["-a", url.path]
+                var environment = ProcessInfo.processInfo.environment
+                environment.removeValue(forKey: "ELECTRON_RUN_AS_NODE")
+                opener.environment = environment
+                try opener.run()
+                launched = nil
+            }
+            try await Task.sleep(for: .milliseconds(1500))
+            if NSRunningApplication.runningApplications(withBundleIdentifier: ClientReloader.desktopBundleID)
+                .contains(where: { !$0.isTerminated && (attempt == 1 || $0.processIdentifier == launched?.processIdentifier) }) { return }
+        }
+        throw CocoaError(.executableLoad)
     }
 }
 
@@ -49,9 +86,14 @@ struct LocalProcessControl: ProcessControl {
     func terminate(_ process: AgyProcess) -> Bool {
         // A PID can be recycled after validation. The kernel checks the audit
         // token's PID version when delivering this signal, including across exec.
-        guard var token = auditToken(process.pid), let path = executable(process.pid), (path as NSString).lastPathComponent == "agy",
+        guard let path = executable(process.pid), path == process.executable,
               isRunning(process) else { return false }
-        return proc_signal_with_audittoken(&token, SIGTERM) == 0
+        if var token = auditToken(process.pid) {
+            guard executable(process.pid) == path, isRunning(process) else { return false }
+            if proc_signal_with_audittoken(&token, SIGTERM) == 0 { return true }
+        }
+        guard executable(process.pid) == path, isRunning(process) else { return false }
+        return kill(process.pid, SIGTERM) == 0
     }
 
     func isRunning(_ process: AgyProcess) -> Bool {

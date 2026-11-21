@@ -35,6 +35,32 @@ final class MenuPopoverTests: XCTestCase {
         XCTAssertEqual(polls, 1)
     }
 
+    @MainActor func testHoverDebounceCacheAndDisabledMode() async throws {
+        let model = MenuModel()
+        var calls = 0
+        model.loadQuota = { _ in calls += 1; return [] }
+        model.hover("a", inside: true)
+        model.hover("a", inside: false)
+        try await Task.sleep(for: .milliseconds(280))
+        XCTAssertEqual(calls, 0)
+        for _ in 0..<2 {
+            model.hover("b", inside: true)
+            try await Task.sleep(for: .milliseconds(320))
+            XCTAssertEqual(calls, 1)
+            XCTAssertFalse(model.busy)
+            model.hover("b", inside: false)
+        }
+        model.hover("b", inside: true)
+        model.refreshQuota()
+        try await Task.sleep(for: .milliseconds(320))
+        XCTAssertEqual(calls, 2)
+        model.quotaEnabled = false
+        model.hover("c", inside: true)
+        try await Task.sleep(for: .milliseconds(280))
+        XCTAssertEqual(calls, 2)
+        XCTAssertNil(model.quotaDisplay)
+    }
+
     func testReturningFromLoginShowsSaveEvenWhenSnapshotIsUnchangedAndErrorsRecover() {
         let signedOut = PoolSnapshot()
         let fresh = PoolSnapshot(currentEmail: "new@example.com")
@@ -103,12 +129,36 @@ final class MenuPopoverTests: XCTestCase {
             XCTAssertEqual(updates, 0)
             withExtendedLifetime(observer) {}
 
+            let windowSize = host.view.window?.frame.size
+            XCTAssertNotNil(windowSize)
+            func assertStable(file: StaticString = #filePath, line: UInt = #line) {
+                XCTAssertEqual(settledSize(popover, host: host), compact, file: file, line: line)
+                XCTAssertEqual(host.view.window?.frame.size, windowSize, file: file, line: line)
+            }
             model.feedback = .switchResult(target: "primary", changed: true, offersReload: true)
-            assertSize(settledSize(popover, host: host), equals: compact)
+            assertStable()
             model.feedback = .switchResult(target: String(repeating: "w", count: 48), changed: true, offersReload: true)
-            assertSize(settledSize(popover, host: host), equals: compact)
+            assertStable()
+            model.quotaDisplay = .loading
+            assertStable()
+            let buckets: [ModelQuota.Bucket] = [
+                .init(window: "weekly", fraction: 0.426, reset: Date().addingTimeInterval(522000)),
+                .init(window: "5h", fraction: 0.184, reset: Date().addingTimeInterval(8940))
+            ]
+            var groups = [ModelQuota(family: "Gemini Models", buckets: buckets),
+                          ModelQuota(family: "Claude and GPT models", buckets: [
+                            .init(window: "5h", fraction: 1), .init(window: "weekly", fraction: 1)
+                          ])]
+            model.quotaDisplay = .ready(groups)
+            assertStable()
+            groups.append(ModelQuota(family: "Gemini 4 Argon", buckets: [buckets[0]]))
+            model.quotaDisplay = .ready(groups)
+            assertStable()
+            model.quotaDisplay = .failed(.quotaExpired)
+            assertStable()
+            model.quotaDisplay = nil
             model.feedback = nil
-            assertSize(settledSize(popover, host: host), equals: compact)
+            assertStable()
 
             model.showsAddAccount = true
             model.signInStarted = true

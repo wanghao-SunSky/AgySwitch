@@ -1,10 +1,69 @@
 import Foundation
+import Security
 
 public protocol Keychain {
     func read(service: String, account: String) throws -> Data?
     func write(service: String, account: String, raw: Data) throws
     func delete(service: String, account: String) throws
     func clearActiveLogin() throws
+}
+
+// Legacy login Keychain entries may grant password access only to /usr/bin/security.
+// Attribute-only reads do not need password access. Keychain timestamps have second precision.
+private final class LoginKeychain {
+    struct Version: Equatable {
+        let reference: Data
+        let modified: Date
+    }
+    struct Entry {
+        let version: Version
+        let bytes: Data
+    }
+    private var entries: [String: Entry] = [:]
+    private let lock = NSLock()
+    private let chain: SecKeychain?
+
+    init(path: String) {
+        var item: SecKeychain?
+        chain = SecKeychainOpen(path, &item) == errSecSuccess ? item : nil
+    }
+
+    func requireUnlocked() throws {
+        guard let chain else { throw AppError.keychainUnavailable }
+        var status = SecKeychainStatus()
+        guard SecKeychainGetStatus(chain, &status) == errSecSuccess,
+              status & UInt32(kSecUnlockStateStatus) != 0 else { throw AppError.keychainUnavailable }
+    }
+
+    func read(service: String, account: String, load: () throws -> Data?) rethrows -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = service + "\u{0}" + account
+        guard let version = version(service, account) else {
+            entries.removeValue(forKey: key)
+            return try load()
+        }
+        if let entry = entries[key], entry.version == version { return entry.bytes }
+        entries.removeValue(forKey: key)
+        let settled = version.modified.timeIntervalSinceNow < -2
+        let bytes = try load()
+        if let bytes, settled, self.version(service, account) == version {
+            entries[key] = Entry(version: version, bytes: bytes)
+        }
+        return bytes
+    }
+
+    private func version(_ service: String, _ account: String) -> Version? {
+        guard let chain else { return nil }
+        let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecMatchSearchList: [chain],
+            kSecAttrService: service, kSecAttrAccount: account, kSecReturnAttributes: true,
+            kSecReturnPersistentRef: true]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let fields = item as? [CFString: Any], let reference = fields[kSecValuePersistentRef] as? Data,
+              let modified = fields[kSecAttrModificationDate] as? Date else { return nil }
+        return Version(reference: reference, modified: modified)
+    }
 }
 
 public struct MacKeychain: Keychain {
@@ -26,12 +85,14 @@ public struct MacKeychain: Keychain {
     private static let textDetail = try! NSRegularExpression(pattern: #"^password: "([^\n]*)"$"#,
                                                              options: .anchorsMatchLines)
 
+    private var cache: LoginKeychain?
     private let path: String
     private let runner: Runner
 
     public init() {
         self.init(path: FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Keychains/login.keychain-db").path, runner: Self.run)
+        cache = LoginKeychain(path: path)
     }
 
     init(path: String, runner: @escaping Runner) {
@@ -40,6 +101,14 @@ public struct MacKeychain: Keychain {
     }
 
     public func read(service: String, account: String) throws -> Data? {
+        if let cache {
+            try cache.requireUnlocked()
+            return try cache.read(service: service, account: account) { try readPassword(service, account) }
+        }
+        return try readPassword(service, account)
+    }
+
+    private func readPassword(_ service: String, _ account: String) throws -> Data? {
         let query = ["-s", service, "-a", account, path]
         let result = try execute(["find-generic-password", "-w"] + query)
         if result.status == Self.notFound { return nil }
@@ -61,6 +130,7 @@ public struct MacKeychain: Keychain {
     }
 
     public func write(service: String, account: String, raw: Data) throws {
+        try cache?.requireUnlocked()
         let command = try Self.writeCommand(service: service, account: account, raw: raw, path: path)
         guard try execute(["-i"], input: command).status == 0 else {
             throw AppError.keychainWrite
@@ -77,6 +147,7 @@ public struct MacKeychain: Keychain {
     }
 
     private func deleteEntry(service: String, account: String, failure: AppError) throws {
+        try cache?.requireUnlocked()
         let result = try execute(["delete-generic-password", "-s", service, "-a", account, path])
         guard result.status == 0 || result.status == Self.notFound else {
             throw failure

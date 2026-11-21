@@ -18,14 +18,29 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDeleg
     private var feedbackExpiry: DispatchWorkItem?
     private var reloading = false
     private var refreshFeedbackRequested = false
-    private var hasReadPool = false
-    private var pendingOpen = false
     private var language: DisplayLanguage { model.displayLanguage }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        preferences.register(defaults: [autoReloadKey: false, "autoWatchEnabled": false, "defaultCooldownSeconds": 18_000,
+        preferences.register(defaults: [autoReloadKey: false, "quotaOnHover": true, "autoWatchEnabled": false, "defaultCooldownSeconds": 18_000,
                                         AppLanguage.preferenceKey: AppLanguage.system.rawValue])
         model.language = preferences.string(forKey: AppLanguage.preferenceKey).flatMap(AppLanguage.init(rawValue:)) ?? .system
+        model.quotaEnabled = preferences.bool(forKey: "quotaOnHover")
+        model.loadQuota = { [work] id in
+            let token = try await work.read { try $0.quotaAccessToken(accountID: id) }
+            try Task.checkCancellation()
+            do { return try await QuotaClient.fetch(accessToken: token) }
+            catch QuotaError.expired {
+                try Task.checkCancellation()
+                guard let executable = Self.agyExecutable() else { throw QuotaError.expired }
+                let fresh = try await work.read { pool in
+                    try pool.renewActiveQuotaToken(accountID: id, rejected: token) {
+                        try LocalWork.renewLogin(using: executable)
+                    }
+                }
+                try Task.checkCancellation()
+                return try await QuotaClient.fetch(accessToken: fresh)
+            }
+        }
         model.autoReload = preferences.bool(forKey: autoReloadKey)
         model.automatic = preferences.bool(forKey: "autoWatchEnabled")
         let cooldown = preferences.integer(forKey: "defaultCooldownSeconds")
@@ -72,12 +87,6 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDeleg
     @objc private func togglePopover() {
         if popover.isShown {
             popover.performClose(nil)
-        } else if pendingOpen {
-            pendingOpen = false
-        } else if !model.busy && (!hasReadPool || model.signInStarted) {
-            // Present the first frame with the actual login, including when returning from Terminal.
-            pendingOpen = true
-            reload()
         } else {
             presentPopover()
             reload()
@@ -96,18 +105,25 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDeleg
     }
 
     func popoverWillClose(_ notification: Notification) {
+        model.clearHover()
         model.setPopoverVisible(false)
     }
 
     private func handle(_ action: MenuAction) {
         switch action {
+        case .setQuotaOnHover(let enabled):
+            model.quotaEnabled = enabled
+            if !enabled { model.clearHover(cancelRequests: true) }
+            preferences.set(enabled, forKey: "quotaOnHover")
         case .setAutoReload(let enabled):
             model.autoReload = enabled
             preferences.set(enabled, forKey: autoReloadKey)
         case .reloadClients:
             guard !model.busy else { return }
             reloadClients()
-        case .refresh: reload(showFeedback: true)
+        case .refresh:
+            model.refreshQuota()
+            reload(showFeedback: true)
         case .checkLogin: reload()
         case .beginAddAccount: beginAddAccount()
         case .inspect:
@@ -177,7 +193,7 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDeleg
             updateTooltip()
         case let .switched(result):
             if result.changed && model.autoReload {
-                reloadClients(switchedTo: result.target, notifyOnCompletion: true)
+                reloadClients(switchedTo: result.target, login: result.reloadLogin, notifyOnCompletion: true)
             } else {
                 if result.changed { notify(alias: result.target, body: language[.reopenSession]) }
                 show(.switchResult(target: result.target, changed: result.changed))
@@ -207,7 +223,6 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDeleg
             let showFeedback = refreshFeedbackRequested
             refreshFeedbackRequested = false
             reloading = false
-            hasReadPool = true
             switch result {
             case let .success(snapshot):
                 applySnapshot(snapshot)
@@ -216,10 +231,7 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDeleg
                 model.reportRefreshFailure(error)
                 updateTooltip()
             }
-            if pendingOpen {
-                pendingOpen = false
-                presentPopover()
-            }
+
         }
     }
 
@@ -323,14 +335,14 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDeleg
         run(action, snapshot: \.snapshot, changedLogin: \.changed) { [self] outcome in
             model.finishSignIn()
             if outcome.changed && model.autoReload {
-                reloadClients(switchedTo: outcome.target)
+                reloadClients(switchedTo: outcome.target, login: outcome.reloadLogin)
                 return nil
             }
             return .switchResult(target: outcome.target, changed: outcome.changed, offersReload: !model.autoReload)
         }
     }
 
-    private func reloadClients(switchedTo alias: String? = nil, notifyOnCompletion: Bool = false) {
+    private func reloadClients(switchedTo alias: String? = nil, login: ReloadLogin? = nil, notifyOnCompletion: Bool = false) {
         // A watcher event can arrive while a menu-initiated reload is waiting for desktop exit.
         let previous = clientReloadTask
         model.pendingClientReloads += 1
@@ -338,13 +350,23 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDeleg
         model.feedback = MenuFeedback(.info, .reloadingClients)
         clientReloadTask = Task {
             await previous?.value
-            let outcome = await clientReloader.reloadClients()
+            defer {
+                model.pendingClientReloads -= 1
+                if model.pendingClientReloads == 0 { clientReloadTask = nil }
+            }
+            let target: ReloadLogin?
+            do {
+                if let login { target = login }
+                else { target = try await work.read { try $0.currentReloadLogin() } }
+            } catch { show(MenuFeedback(.warning, AppError(redacting: error).text)); return }
+            let outcome = await clientReloader.reloadClients {
+                if let target { try await work.read { try $0.verifyAfterReload(target) } }
+            }
             let detail = LocalizedText.reloadSummary(outcome)
             show(MenuFeedback(outcome.hasWarning ? .warning : .info,
                               alias.map(LocalizedText.switched) ?? AppLabel.reloadResult.text, detail: detail))
             if notifyOnCompletion, let alias { notify(alias: alias, body: detail.localized(in: language)) }
-            model.pendingClientReloads -= 1
-            if model.pendingClientReloads == 0 { clientReloadTask = nil }
+
         }
     }
 

@@ -2,6 +2,7 @@ import Foundation
 
 public struct AgyProcess: Equatable {
     public enum Kind { case acp, cli }
+    public let executable: String
     public let pid: Int32
     public let startedSeconds: UInt64
     public let startedMicros: UInt64
@@ -16,6 +17,7 @@ public struct AgyProcess: Equatable {
               (executable as NSString).lastPathComponent == "agy",
               let name = arguments.first, (name as NSString).lastPathComponent == "agy",
               fields[1] == name || fields[1].hasPrefix(name + " ") else { return nil }
+        self.executable = executable
         self.pid = pid
         self.startedSeconds = startedSeconds
         self.startedMicros = startedMicros
@@ -31,6 +33,7 @@ public protocol ProcessControl {
 
 @MainActor public protocol DesktopAppControl {
     func runningApplication(bundleID: String) -> (any DesktopApplication)?
+    func hasRemainingClients(at url: URL) -> Bool
     func reopen(at url: URL) async throws
 }
 
@@ -46,9 +49,10 @@ public struct ClientReloadOutcome {
     public internal(set) var reloadedAcpCount = 0
     public internal(set) var stoppedCliCount = 0
     public internal(set) var unfinishedProcesses = 0
+    public internal(set) var credentialVerificationFailed = false
     public internal(set) var processScanFailed = false
     public var hasWarning: Bool {
-        processScanFailed || unfinishedProcesses > 0 || desktop == .stillRunning || desktop == .failed
+        credentialVerificationFailed || processScanFailed || unfinishedProcesses > 0 || desktop == .stillRunning || desktop == .failed
     }
 }
 
@@ -68,16 +72,17 @@ public struct ClientReloadOutcome {
         self.pause = pause
     }
 
-    public func reloadClients() async -> ClientReloadOutcome {
+    public func reloadClients(verifyLogin: () async throws -> Void = {}) async -> ClientReloadOutcome {
         var outcome = ClientReloadOutcome()
         let app = desktop.runningApplication(bundleID: Self.desktopBundleID)
+        let originalURL = app?.bundleURL
         do {
             var pending = try await processes.processes().filter { process in
                 if processes.terminate(process) { return true }
                 if processes.isRunning(process) { outcome.unfinishedProcesses += 1 }
                 return false
             }
-            let deadline = uptime() + 1.5
+            let deadline = uptime() + 12
             while !pending.isEmpty {
                 pending.removeAll { process in
                     guard !processes.isRunning(process) else { return false }
@@ -94,12 +99,23 @@ public struct ClientReloadOutcome {
         } catch {
             outcome.processScanFailed = true
         }
-        guard let app, !app.isTerminated else { return outcome }
-        guard let url = app.bundleURL else { outcome.desktop = .failed; return outcome }
-        guard app.terminate() else { outcome.desktop = .stillRunning; return outcome }
-        let deadline = uptime() + 5
-        while !app.isTerminated && uptime() < deadline { await pause() }
-        guard app.isTerminated else { outcome.desktop = .stillRunning; return outcome }
+        guard !outcome.processScanFailed, outcome.unfinishedProcesses == 0 else { return outcome }
+        var reopenURL: URL?
+        if let app {
+            guard let url = originalURL else { outcome.desktop = .failed; return outcome }
+            if !app.isTerminated { _ = app.terminate() }
+            let deadline = uptime() + 20
+            while !app.isTerminated || desktop.hasRemainingClients(at: url) {
+                guard uptime() < deadline else { outcome.desktop = .stillRunning; return outcome }
+                await pause()
+            }
+            let settled = uptime() + 0.5
+            while uptime() < settled { await pause() }
+            reopenURL = url
+        }
+        do { try await verifyLogin() }
+        catch { outcome.credentialVerificationFailed = true; return outcome }
+        guard let url = reopenURL else { return outcome }
         do {
             try await desktop.reopen(at: url)
             outcome.desktop = .restarted

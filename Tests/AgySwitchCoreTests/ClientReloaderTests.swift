@@ -49,6 +49,7 @@ final class ClientReloaderTests: XCTestCase {
             return running ? self : nil
         }
         func terminate() -> Bool { requests += 1; return true }
+        func hasRemainingClients(at url: URL) -> Bool { !isTerminated }
         func reopen(at url: URL) async throws {
             XCTAssertTrue(isTerminated)
             opened.append(url)
@@ -63,7 +64,7 @@ final class ClientReloaderTests: XCTestCase {
             processes.entries.append(AgyProcess(psRow: row[...], executable: "/bin/agy", arguments: args, ownPID: 42,
                                                 startedSeconds: 1, startedMicros: 0)!)
         }
-        processes.alive = [11, 13, 14]
+        processes.alive = [11]
         var now = 0.0
         let sut = ClientReloader(processes: processes, desktop: desktop, uptime: { now }, pause: {
             now += 0.25
@@ -75,10 +76,32 @@ final class ClientReloaderTests: XCTestCase {
         XCTAssertEqual(desktop.requests, 1)
         XCTAssertEqual(desktop.opened, [desktop.bundleURL!])
         XCTAssertEqual(result.reloadedAcpCount, 1)
-        XCTAssertEqual(result.stoppedCliCount, 1)
-        XCTAssertEqual(result.unfinishedProcesses, 2)
+        XCTAssertEqual(result.stoppedCliCount, 3)
+        XCTAssertEqual(result.unfinishedProcesses, 0)
         XCTAssertEqual(processes.sent, [11, 12, 13, 14])
-        XCTAssertEqual(now, 1.75)
+        XCTAssertEqual(now, 1.0)
+    }
+
+    @MainActor func testDesktopAlreadyExitedWhileStoppingCLIStillReopensAfterVerification() async {
+        let processes = Processes(), desktop = Desktop()
+        processes.entries = [AgyProcess(psRow: "11 agy", executable: "/bin/agy", arguments: ["agy"],
+                                        ownPID: 42, startedSeconds: 1, startedMicros: 0)!]
+        processes.alive = [11]
+        var time = 0.0
+        let reloader = ClientReloader(processes: processes, desktop: desktop, uptime: { time }, pause: {
+            time += 0.25
+            desktop.isTerminated = true
+            processes.alive.removeAll()
+        })
+        var verified = false
+        let outcome = await reloader.reloadClients {
+            XCTAssertTrue(desktop.opened.isEmpty)
+            XCTAssertTrue(desktop.isTerminated)
+            verified = true
+        }
+        XCTAssertTrue(verified)
+        XCTAssertEqual(outcome.desktop, .restarted)
+        XCTAssertEqual(desktop.requests, 0)
     }
 
     @MainActor func testAbsentTimedOutAndFailedDesktop() async {
@@ -97,12 +120,13 @@ final class ClientReloaderTests: XCTestCase {
         let timeout = await sut.reloadClients()
         XCTAssertEqual(timeout.desktop, .stillRunning)
         XCTAssertEqual(desktop.requests, 1)
-        XCTAssertEqual(now, 5)
+        XCTAssertEqual(now, 20)
         XCTAssertTrue(desktop.opened.isEmpty)
         desktop.failOpen = true
-        processes.fail = true
         let failed = await sut.reloadClients()
         XCTAssertEqual(failed.desktop, .failed)
-        XCTAssertTrue(failed.processScanFailed)
+        processes.fail = true
+        let scanFailed = await sut.reloadClients()
+        XCTAssertTrue(scanFailed.processScanFailed)
     }
 }
