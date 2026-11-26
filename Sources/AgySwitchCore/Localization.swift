@@ -99,8 +99,7 @@ public struct LocalizedText: Equatable {
 
 public enum AppLabel: CaseIterable {
     case autoReload, reloadMenu, reloadClients, reloadingClients, reloadResult
-    case fiveHourRemaining, weeklyRemaining
-    case quotaOnHover, loadingQuota, quotaFailed, quotaExpired, resetsIn
+    case quotaRiskMenu, quotaRiskTitle, quotaRiskDetail
     case language, followSystem
     case listening, listenerStopped, refresh
     case enableLoginItem, disableLoginItem, openLogs, inspect, quit, more
@@ -116,13 +115,11 @@ public enum AppLabel: CaseIterable {
 
     public var text: LocalizedText {
         switch self {
-        case .fiveHourRemaining: return .init("5h remaining", "5 小时剩余")
-        case .weeklyRemaining: return .init("Weekly remaining", "周额度剩余")
-        case .quotaOnHover: return .init("Quota on Hover", "悬停查看额度")
-        case .loadingQuota: return .init("Loading quota…", "正在获取额度…")
-        case .quotaFailed: return .init("Quota unavailable", "暂时无法获取额度")
-        case .quotaExpired: return .init("Sign-in expired. Switch to this account and sign in again in agy", "登录已失效，请切到此账号并重新登录 agy")
-        case .resetsIn: return .init("Resets in", "重置剩余")
+        case .quotaRiskMenu: return .init("Quota Check Disabled (Safety)", "额度查询已停用（防风控）")
+        case .quotaRiskTitle: return .init("Internal quota API check removed", "已移除内部额度接口查询")
+        case .quotaRiskDetail:
+            return .init("Google warns calling internal quota APIs may flag accounts. Check limits in official clients.",
+                         "Google 提示调用内部配额接口可能触发账号标记，请在官方客户端查看额度")
         case .autoReload: return .init("Auto-Reload Clients on Switch", "切号后自动重载客户端")
         case .reloadMenu: return .init("Reload agy & Desktop", "重载 agy 与桌面版")
         case .reloadClients: return .init("Reload Clients", "立即重载")

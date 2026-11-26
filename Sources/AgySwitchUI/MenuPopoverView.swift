@@ -3,7 +3,7 @@ import SwiftUI
 
 public enum MenuAction {
     case refresh, checkLogin, inspect, openLogs, toggleLoginItem, quit
-    case reloadClients, setAutoReload(Bool), setQuotaOnHover(Bool)
+    case reloadClients, setAutoReload(Bool), showQuotaRiskNotice
     case beginAddAccount
     case save(alias: String, email: String)
     case select(String), next, rename(id: String, alias: String), remove(String)
@@ -47,47 +47,18 @@ public struct MenuFeedback: Equatable {
 
 public final class MenuModel: ObservableObject {
     @Published public private(set) var pool: PoolSnapshot
-    public enum QuotaDisplay { case loading, failed(AppLabel), ready([ModelQuota]) }
-    @Published public var quotaDisplay: QuotaDisplay?
-    @Published public var quotaEnabled = true
-    public var loadQuota: (String) async throws -> [ModelQuota] = { _ in throw QuotaError.unavailable }
-    @MainActor private lazy var quotaCache = QuotaCache()
     @Published var hoveredAccount: String?
-    private var hoverTask: Task<Void, Never>?
 
-    @MainActor public func hover(_ id: String, inside: Bool) {
-        guard inside || hoveredAccount == id else { return }
-        if inside && hoveredAccount == id { return }
-        clearHover()
-        guard inside else { return }
-        hoveredAccount = id
-        guard quotaEnabled else { return }
-        hoverTask = Task {
-            do {
-                try await Task.sleep(for: .milliseconds(250))
-                quotaDisplay = .loading
-                let rows = try await quotaCache.rows(for: id) { [loadQuota] in try await loadQuota(id) }
-                try Task.checkCancellation()
-                quotaDisplay = .ready(rows)
-            } catch {
-                if !Task.isCancelled { quotaDisplay = .failed(error as? QuotaError == .expired ? .quotaExpired : .quotaFailed) }
-            }
+    @MainActor func hover(_ id: String, inside: Bool) {
+        if inside {
+            if hoveredAccount != id { hoveredAccount = id }
+        } else if hoveredAccount == id {
+            clearHover()
         }
     }
 
-    @MainActor public func refreshQuota() {
-        let id = hoveredAccount
-        clearHover()
-        quotaCache.invalidate()
-        if let id { hover(id, inside: true) }
-    }
-
-    @MainActor public func clearHover(cancelRequests: Bool = true) {
+    @MainActor public func clearHover() {
         if hoveredAccount != nil { hoveredAccount = nil }
-        hoverTask?.cancel()
-        hoverTask = nil
-        if cancelRequests { quotaCache.cancelRequests() }
-        if quotaDisplay != nil { quotaDisplay = nil }
     }
 
     @Published public var autoReload = false
@@ -482,20 +453,7 @@ public struct MenuPopoverView: View {
 
             // Reserve room for action feedback so its arrival and expiry don't move the controls.
             ZStack(alignment: .topLeading) {
-                if let quota = model.quotaDisplay, !model.busy {
-                    VStack(alignment: .leading, spacing: 4) {
-                        switch quota {
-                        case .loading: Text(language[.loadingQuota])
-                        case let .failed(label): Text(language[label])
-                        case let .ready(rows):
-                            TimelineView(.periodic(from: .now, by: 60)) { tick in
-                                quotaTable(rows, now: referenceDate ?? tick.date)
-                            }
-                        }
-                    }
-                    .font(.system(size: 10)).monospacedDigit().foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                } else if let feedback = model.feedback {
+                if let feedback = model.feedback {
                     ViewThatFits(in: .vertical) {
                         feedbackView(feedback).fixedSize(horizontal: false, vertical: true)
                         ScrollView { feedbackView(feedback) }
@@ -503,57 +461,7 @@ public struct MenuPopoverView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 116, alignment: .topLeading)
-        }
-    }
-
-    private func quotaTable(_ groups: [ModelQuota], now: Date) -> some View {
-        let windows = Set(groups.flatMap { $0.buckets.map(\.window) })
-        let columns = ["5h", "weekly"].filter(windows.contains) + windows.subtracting(["5h", "weekly"]).sorted()
-        return ScrollView([.vertical, .horizontal]) {
-            Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 4) {
-                GridRow {
-                    Color.clear.frame(width: 85, height: 1)
-                    ForEach(columns, id: \.self) { window in
-                        Text(window == "5h" ? language[.fiveHourRemaining] :
-                                window == "weekly" ? language[.weeklyRemaining] : window)
-                            .frame(width: 86, alignment: .leading)
-                    }
-                }
-                ForEach(groups.indices, id: \.self) { index in
-                    let group = groups[index]
-                    GridRow {
-                        Text(group.family == "Claude and GPT models" ? "Claude / GPT" :
-                                group.family == "Gemini Models" ? "Gemini" : group.family)
-                            .font(.system(size: 11, weight: .medium)).foregroundStyle(.primary)
-                            .frame(width: 85, alignment: .leading)
-                        ForEach(columns, id: \.self) { window in
-                            if let bucket = group.buckets.first(where: { $0.window == window }) {
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(bucket.fraction.formatted(.percent.precision(.fractionLength(0...1))))
-                                        .font(.system(size: 12, weight: .semibold)).monospacedDigit()
-                                        .foregroundStyle(bucket.fraction == 0 ? Color.red :
-                                                            bucket.fraction < 0.25 ? Color.orange : Color.primary)
-                                    if let reset = bucket.reset {
-                                        let seconds = reset.timeIntervalSince(now)
-                                        let duration = seconds <= 0 ? (language == .en ? "0m" : "0 分钟") :
-                                            LocalizedText.cooldownCountdown(seconds).localized(in: language)
-                                        HStack(spacing: 2) {
-                                            Image(systemName: "clock").font(.system(size: 8))
-                                            Text(duration)
-                                        }
-                                        .accessibilityElement(children: .ignore)
-                                        .accessibilityLabel(language[.resetsIn] + " " + duration)
-                                    }
-                                }
-                                .frame(width: 86, height: 28, alignment: .leading)
-                            } else {
-                                Text("—").foregroundStyle(.tertiary)
-                            }
-                        }
-                    }
-                }
-            }
+            .frame(height: 60, alignment: .topLeading)
         }
     }
 
@@ -621,7 +529,7 @@ public struct MenuPopoverView: View {
     }
 }
 
-private struct MoreButton: View {
+struct MoreButton: View {
     @ObservedObject var model: MenuModel
     @State private var anchor = NSView()
     @State private var tracking = false
@@ -659,7 +567,7 @@ private struct MoreButton: View {
         .accessibilityLabel(model.displayLanguage[.more])
     }
 
-    private func makeMenu() -> NSMenu {
+    func makeMenu() -> NSMenu {
         let language = model.displayLanguage
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -679,7 +587,7 @@ private struct MoreButton: View {
             item.isEnabled = enabled
             menu.addItem(item)
         }
-        add(.quotaOnHover, .setQuotaOnHover(!model.quotaEnabled), checked: model.quotaEnabled)
+        add(.quotaRiskMenu, .showQuotaRiskNotice)
         add(.autoReload, .setAutoReload(!model.autoReload), checked: model.autoReload)
         add(.reloadMenu, .reloadClients, enabled: !model.busy)
         menu.addItem(.separator())

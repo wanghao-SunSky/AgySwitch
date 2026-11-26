@@ -43,15 +43,6 @@ final class LocalWork {
         }
     }
 
-    private let quotaWork = DispatchGroup()
-
-    @MainActor func loadQuota(accountID: String, executable: URL?) async throws -> [ModelQuota] {
-        try Task.checkCancellation()
-        quotaWork.enter()
-        defer { quotaWork.leave() }
-        return try await pool.loadQuota(accountID: accountID, executable: executable)
-    }
-
     func configure(automatic: Bool, cooldown: Int) {
         queue.async { [self] in
             self.cooldown = cooldown
@@ -71,7 +62,7 @@ final class LocalWork {
     func finish(_ completion: @escaping () -> Void) {
         queue.async {
             self.stopWatcher()
-            self.quotaWork.notify(queue: .main, execute: completion)
+            DispatchQueue.main.async(execute: completion)
         }
     }
 

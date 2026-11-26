@@ -1,5 +1,6 @@
 import AgySwitchCore
-import AgySwitchUI
+@testable import AgySwitch
+@testable import AgySwitchUI
 import AppKit
 import Combine
 import SwiftUI
@@ -35,50 +36,20 @@ final class MenuPopoverTests: XCTestCase {
         XCTAssertEqual(polls, 1)
     }
 
-    @MainActor func testHoverDebounceCacheAndDisabledMode() async throws {
+    @MainActor func testHoverOnlyHighlightsTheCurrentRow() {
         let model = MenuModel()
-        var calls = 0
-        model.loadQuota = { _ in calls += 1; return [] }
+        model.send = { _ in XCTFail("Hover should not send a menu action") }
         model.hover("a", inside: true)
-        model.hover("a", inside: false)
-        try await Task.sleep(for: .milliseconds(280))
-        XCTAssertEqual(calls, 0)
-        for _ in 0..<2 {
-            model.hover("b", inside: true)
-            try await Task.sleep(for: .milliseconds(320))
-            XCTAssertEqual(calls, 1)
-            XCTAssertFalse(model.busy)
-            model.hover("b", inside: false)
-        }
+        XCTAssertEqual(model.hoveredAccount, "a")
         model.hover("b", inside: true)
-        model.refreshQuota()
-        try await Task.sleep(for: .milliseconds(320))
-        XCTAssertEqual(calls, 2)
-        model.quotaEnabled = false
-        model.hover("c", inside: true)
-        try await Task.sleep(for: .milliseconds(280))
-        XCTAssertEqual(calls, 2)
-        XCTAssertNil(model.quotaDisplay)
-    }
-
-    @MainActor func testLeavingRowCancelsTheUnderlyingQuotaLoad() async {
-        let model = MenuModel()
-        let started = expectation(description: "Quota load started")
-        let cancelled = expectation(description: "Quota load cancelled")
-        model.loadQuota = { _ in
-            started.fulfill()
-            do { try await Task.sleep(for: .seconds(5)) }
-            catch is CancellationError {
-                cancelled.fulfill()
-                throw CancellationError()
-            }
-            return []
-        }
-        model.hover("a", inside: true)
-        await fulfillment(of: [started], timeout: 2)
         model.hover("a", inside: false)
-        await fulfillment(of: [cancelled], timeout: 2)
-        XCTAssertNil(model.quotaDisplay)
+        XCTAssertEqual(model.hoveredAccount, "b")
+        model.hover("b", inside: false)
+        XCTAssertNil(model.hoveredAccount)
+        model.hover("a", inside: true)
+        model.clearHover()
+        XCTAssertNil(model.hoveredAccount)
+        XCTAssertNil(model.feedback)
     }
 
     func testReturningFromLoginShowsSaveEvenWhenSnapshotIsUnchangedAndErrorsRecover() {
@@ -103,8 +74,10 @@ final class MenuPopoverTests: XCTestCase {
     }
 
     @MainActor
-    func testHostedPanelKeepsItsSizeThroughEqualRefreshesAndBusyTransitions() {
+    func testHostedPanelKeepsItsSizeThroughRefreshesBusyStatesAndFeedback() throws {
         _ = NSApplication.shared
+        // Enable SwiftUI accessibility nodes for the test host without starting an assistive client.
+        NSApp.accessibilitySetValue(true, forAttribute: .init(rawValue: "AXEnhancedUserInterface"))
         let anchor = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 32, height: 32),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         anchor.alphaValue = 0
@@ -159,24 +132,26 @@ final class MenuPopoverTests: XCTestCase {
             assertStable()
             model.feedback = .switchResult(target: String(repeating: "w", count: 48), changed: true, offersReload: true)
             assertStable()
-            model.quotaDisplay = .loading
+            let delegate = ApplicationDelegate(model: model)
+            let menu = MoreButton(model: model).makeMenu()
+            let displayLanguage = model.displayLanguage
+            let riskItem = try XCTUnwrap(menu.item(withTitle: displayLanguage[.quotaRiskMenu]))
+            XCTAssertTrue(riskItem.isEnabled)
+            XCTAssertEqual(riskItem.state, .off)
+            menu.performActionForItem(at: menu.index(of: riskItem))
+            XCTAssertEqual(model.feedback, MenuFeedback(.warning, .quotaRiskTitle, detail: .quotaRiskDetail))
             assertStable()
-            let buckets: [ModelQuota.Bucket] = [
-                .init(window: "weekly", fraction: 0.426, reset: Date().addingTimeInterval(522000)),
-                .init(window: "5h", fraction: 0.184, reset: Date().addingTimeInterval(8940))
-            ]
-            var groups = [ModelQuota(family: "Gemini Models", buckets: buckets),
-                          ModelQuota(family: "Claude and GPT models", buckets: [
-                            .init(window: "5h", fraction: 1), .init(window: "weekly", fraction: 1)
-                          ])]
-            model.quotaDisplay = .ready(groups)
-            assertStable()
-            groups.append(ModelQuota(family: "Gemini 4 Argon", buckets: [buckets[0]]))
-            model.quotaDisplay = .ready(groups)
-            assertStable()
-            model.quotaDisplay = .failed(.quotaExpired)
-            assertStable()
-            model.quotaDisplay = nil
+
+            let window = try XCTUnwrap(host.view.window)
+            let contentFrame = window.convertToScreen(host.view.convert(host.view.bounds, to: nil))
+            for label in [AppLabel.quotaRiskTitle, .quotaRiskDetail] {
+                let text = displayLanguage[label]
+                let frame = try XCTUnwrap(visibleStaticText(text, in: window), text)
+                XCTAssertTrue(contentFrame.insetBy(dx: -0.5, dy: -0.5).contains(frame), text)
+                XCTAssertGreaterThan(frame.height, 0, text)
+            }
+            withExtendedLifetime(delegate) {}
+
             model.feedback = nil
             assertStable()
 
@@ -191,6 +166,25 @@ final class MenuPopoverTests: XCTestCase {
             XCTAssertGreaterThan(withSave.height, compact.height)
             assertSize(settledSize(popover, host: host), equals: withSave)
         }
+    }
+
+    @MainActor
+    private func visibleStaticText(_ text: String, in element: Any) -> NSRect? {
+        guard let element = element as? NSObject else { return nil }
+        // SwiftUI's accessibility nodes expose these selectors without conforming to NSAccessibilityProtocol.
+        func attribute(_ key: String) -> Any? {
+            guard element.responds(to: NSSelectorFromString(key)) else { return nil }
+            return element.value(forKey: key)
+        }
+        let role = attribute("accessibilityRole") as? String
+        guard role != NSAccessibility.Role.scrollArea.rawValue else { return nil }
+        if role == NSAccessibility.Role.staticText.rawValue, attribute("accessibilityValue") as? String == text {
+            return (attribute("accessibilityFrame") as? NSValue)?.rectValue
+        }
+        for child in attribute("accessibilityChildren") as? [Any] ?? [] {
+            if let frame = visibleStaticText(text, in: child) { return frame }
+        }
+        return nil
     }
 
     @MainActor

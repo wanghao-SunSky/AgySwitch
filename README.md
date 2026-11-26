@@ -2,9 +2,12 @@
 
 English | [简体中文](README.zh-CN.md)
 
-> **AgySwitch** (`v0.2.3`) is an ultra-lightweight (**~2.5 MB**), native macOS menu bar app built with pure Swift & SwiftUI for switching multiple **Google Antigravity CLI (`agy`)** accounts via lossless macOS Keychain snapshots—featuring **on-demand hover quota inspection** (**Gemini 5h/weekly**, **Claude/GPT 5h/weekly**, and **Gemini 4 Argon weekly**, with **automatic silent token renewal** for idle accounts), **one-click tri-client reload** (`Antigravity.app` + T3 Code `agy acp` + terminal `agy`), **automatic quota-exhaustion switching** via passive local log monitoring, **zero third-party dependencies**, **no proxy or OAuth gateway**, and a **built-in English & Simplified Chinese UI** (system-following or instant in-menu switch).
+> **AgySwitch** (`v0.2.4`) is an ultra-lightweight (**~2.5 MB**), **100% zero-network** native macOS menu bar app built with pure Swift & SwiftUI for switching multiple **Google Antigravity CLI (`agy`)** accounts via lossless macOS Keychain snapshots—featuring **one-click account capture (`+`)**, **instant single-click or `⌘↩` switching**, **one-click tri-client reload** (`Antigravity.app` + T3 Code `agy acp` + terminal `agy`), **automatic quota-exhaustion switching** via passive local log monitoring, **zero third-party dependencies**, **no proxy or OAuth gateway**, and a **built-in English & Simplified Chinese UI** (system-following or instant in-menu switch).
 
-**AgySwitch** sits quietly in your macOS menu bar (`⇄`) and makes multi-account `agy` workflows effortless. Whether you rotate two or three **Google AI Pro** accounts (especially during Black Friday or promotional pricing) to achieve near-**Ultra** effective quota capacity, or separate work and personal subscriptions, AgySwitch captures and switches local Keychain credentials in a single click or shortcut, previews live remaining quotas on hover, and automatically rotates to the next available account when a session hits a rate limit—without routing traffic through a proxy gateway, running background network polling, or touching your `agy` settings, MCP servers, skills, or conversation history.
+**AgySwitch** sits quietly in your macOS menu bar (`⇄`) and makes multi-account `agy` workflows effortless. Whether you rotate two or three **Google AI Pro** accounts (especially during Black Friday or promotional pricing) to achieve near-**Ultra** effective quota capacity, or separate work and personal subscriptions, AgySwitch captures and switches local Keychain credentials in a single click or shortcut and automatically rotates to the next available account when a session hits a rate limit—with **zero outbound network requests**, no proxy gateway, no background polling, and zero changes to your `agy` settings, MCP servers, skills, or conversation history.
+
+> [!IMPORTANT]
+> **Security Update in `v0.2.4` (100% Zero-Network Restored)**: Google has warned external tools (e.g., T3 Code PR #43026) that Antigravity only supports the official ACP protocol externally, and querying non-public internal quota endpoints (`cloudcode-pa.googleapis.com`) may cause user Google accounts to be flagged. To keep your accounts completely safe, **`v0.2.4` removes all internal quota API query and `URLSession` code**, restoring `Sources/` to **100% verifiable zero network requests**. The menu bar `⋯` entry now serves as a **"Quota Check Disabled (Safety)"** notice directing you to check quotas inside the official Antigravity client. **All `v0.2.2` and `v0.2.3` users are strongly encouraged to upgrade immediately.**
 
 ---
 
@@ -26,7 +29,7 @@ Since AgySwitch reads and writes macOS Keychain credentials and uses local ad-ho
 
 ```text
 Clone https://github.com/wanghao-SunSky/AgySwitch.git to /tmp/AgySwitch and perform a full security audit of every file under Sources/ and scripts/ before building anything:
-1. Verify network & dependency boundaries: confirm that except for Sources/AgySwitchCore/Quota.swift (which uses an ephemeral, no-cookie, no-cache, no-redirect URLSession only when on-demand hover quota inspection is enabled to send read-only requests directly to Google's official quota endpoints https://aicode.googleapis.com/v1alpha:fetchQuotaStatus and https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary) and Sources/AgySwitchCore/QuotaRenewal.swift (which invokes the locally installed official `agy models` in an isolated 0700 temporary HOME directory to silently renew expired 1-hour OAuth access tokens using the account's existing refresh token—with zero hardcoded OAuth secrets and without modifying the active Keychain login), all other application code under Sources/, scripts/build_app.sh, and scripts/generate_icon.swift makes zero network calls, runs no proxy/gateway or background polling (only scripts/install.sh downloads releases from this GitHub repo), and Package.swift has zero third-party dependencies.
+1. Verify strict zero-network & zero-dependency boundaries: confirm that all code under Sources/, scripts/build_app.sh, and scripts/generate_icon.swift makes zero network requests of any kind (no URLSession, NWConnection, sockets, proxy/gateway, or outbound calls—only scripts/install.sh downloads release archives from this GitHub repository), and confirm Package.swift has zero third-party dependencies.
 2. Verify Keychain & file boundaries: confirm it only reads/writes the macOS login Keychain entries for "gemini" / "antigravity" and its local snapshot vault via `/usr/bin/security -i` stdin pipes, never writes plaintext tokens to disk (only non-sensitive alias, email, and cooldown metadata in registry.json), and never modifies agy's settings.json, MCP configs, skills, or history.
 3. Verify passive log monitoring: confirm the quota watcher only tails `~/.gemini/antigravity-cli/log/cli-*.log` and `acp-server-*.log` in read-only mode.
 
@@ -35,8 +38,8 @@ Present a concise security audit report with file and line references and wait f
 
 ### Option 3: Manual Download
 
-- 📦 [**Download DMG Installer (`AgySwitch-v0.2.3-macos-arm64.dmg`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.3/AgySwitch-v0.2.3-macos-arm64.dmg)
-- 🗂️ [**Download ZIP Archive (`AgySwitch-v0.2.3-macos-arm64.zip`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.3/AgySwitch-v0.2.3-macos-arm64.zip)
+- 📦 [**Download DMG Installer (`AgySwitch-v0.2.4-macos-arm64.dmg`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.4/AgySwitch-v0.2.4-macos-arm64.dmg)
+- 🗂️ [**Download ZIP Archive (`AgySwitch-v0.2.4-macos-arm64.zip`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.4/AgySwitch-v0.2.4-macos-arm64.zip)
 - 🔗 [**GitHub Releases & `SHA256SUMS.txt`**](https://github.com/wanghao-SunSky/AgySwitch/releases/latest)
 
 **First Launch Note (Manual Browser Downloads Only)**: Because AgySwitch is distributed with local ad-hoc signing rather than a paid Apple Developer ID certificate, macOS Gatekeeper may quarantine archives downloaded via a web browser. If macOS says the app is "damaged" or "cannot be verified" after dragging it to `/Applications`, clear the browser quarantine attribute once:
@@ -49,11 +52,11 @@ xattr -cr /Applications/AgySwitch.app
 
 ## Screenshots
 
-| Hover Quota Popover: 5h / Weekly / Gemini 4 Argon (Light) | Hover Quota Popover: 5h / Weekly / Gemini 4 Argon (Dark) |
+| Account Switch & One-Click Client Reload (Light) | Account Switch & One-Click Client Reload (Dark) |
 | :---: | :---: |
-| <img src="docs/screenshots/quota-en-light.png" width="300" alt="AgySwitch English Light Quota Popover" /> | <img src="docs/screenshots/quota-en-dark.png" width="300" alt="AgySwitch English Dark Quota Popover" /> |
-| **Account Switch & One-Click Client Reload (Light)** | **Account Switch & One-Click Client Reload (Dark)** |
 | <img src="docs/screenshots/overview-en-light.png" width="300" alt="AgySwitch English Light Overview" /> | <img src="docs/screenshots/overview-en-dark.png" width="300" alt="AgySwitch English Dark Overview" /> |
+| **One-Click Add Account & Full Panel (Light)** | **One-Click Add Account & Full Panel (Dark)** |
+| <img src="docs/screenshots/managed-en-light.png" width="300" alt="AgySwitch English Light Managed Panel" /> | <img src="docs/screenshots/managed-en-dark.png" width="300" alt="AgySwitch English Dark Managed Panel" /> |
 
 ---
 
@@ -61,11 +64,11 @@ xattr -cr /Applications/AgySwitch.app
 
 Heavy daily usage of frontier models in Google Antigravity CLI (`agy`) quickly exhausts a single account's 5-hour or weekly quota window. Many developers pair two or three **Google AI Pro** accounts (especially when promotional or Black Friday discounts make multi-Pro setups much more cost-effective than a single Ultra tier) and rotate them across coding sessions. Here is how **AgySwitch** compares to local proxy gateways and manual `/logout` rotation:
 
-| Dimension | **AgySwitch (`v0.2.3`)** | Local Proxy / OAuth Gateway Tools | Manual `/logout` & Re-login |
+| Dimension | **AgySwitch (`v0.2.4`)** | Local Proxy / OAuth Gateway Tools | Manual `/logout` & Re-login |
 | :--- | :--- | :--- | :--- |
 | **Traffic Path** | **100% stock `agy` direct connection** | Routed through a local proxy / custom gateway | Stock `agy` direct connection |
-| **Live Quota Visibility** | **Hover any account** for **Gemini (5h + Weekly)**, **Claude/GPT (5h + Weekly)** & **Gemini 4 Argon (Weekly)** | Custom dashboard via gateway polling | None (must log into each account to check) |
-| **Network Activity** | **Zero background polling** (on-demand read-only official quota query on hover; toggleable to strict zero-network mode) | Continuous background polling & token proxying | None |
+| **Network Activity** | **100% zero network requests** (pure local Keychain & read-only log file operations) | Continuous background polling & token proxying | None |
+| **Account Safety** | **Zero non-ACP internal API calls** (no `cloudcode-pa.googleapis.com` polling or custom OAuth client) | Often queries internal APIs or proxies OAuth tokens | Official browser OAuth |
 | **Switching Speed** | Instant single click or `⌘↩` in menu bar (accelerated by Keychain metadata version caching) | Automatic proxy routing | `/logout` + browser OAuth flow every time |
 | **Client Reload** | One-click or automatic reload across **`Antigravity.app` + T3 Code `agy acp` + terminal `agy`** | Proxy-level hot swap | Manual app/terminal restart |
 | **Auto-Switch on Quota Exhaustion** | Yes (passive local log tailing, zero network polling) | Yes (gateway error interception) | No |
@@ -77,25 +80,16 @@ Heavy daily usage of frontier models in Google Antigravity CLI (`agy`) quickly e
 
 ## Core Features
 
-### 1. Live Quota Inspection on Hover (5h / Weekly / Gemini 4 Argon)
-- **Instant Hover Breakdown**: Hover over any saved account row for `250ms` to inspect its real-time remaining quota percentages and reset countdowns across:
-  - **Gemini** (`5h` + `Weekly` windows)
-  - **Claude / GPT** (`5h` + `Weekly` windows)
-  - **Gemini 4 Argon** (`Weekly` window)
-- **On-Demand, Ephemeral & Zero Background Polling**: Quota queries run strictly on demand when you hover an account row, using a 5-minute in-memory cache (`QuotaCache`). Click `↻` in the top bar anytime to invalidate the cache and force a fresh read.
-- **Automatic Silent Renewal for Idle Accounts (`v0.2.3`)**: Google OAuth short-lived `access_token`s expire after 1 hour. When hovering an inactive account whose 1-hour token has expired, AgySwitch invokes your locally installed official `agy models` inside an isolated `0700` temporary `HOME` (`AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1`) to silently refresh the token via its existing `refresh_token`, writes the updated snapshot back to `agy-acct-vault` (strictly preserving `refresh_token` and `writer_id`), and cleans up the temporary directory immediately—with **zero hardcoded OAuth secrets** and **zero impact on your active Keychain or running sessions**.
-- **One-Click Strict Zero-Network Mode**: Prefer zero outbound requests of any kind? Toggle off **Show Quota on Hover** in the top-right `⋯` menu to cancel any in-flight quota requests, clear the quota cache, and run AgySwitch in strict offline/local-only mode.
-
-### 2. Zero-Friction Account Capture, Fast Switching & Tri-Client Reload
+### 1. Zero-Friction Account Capture, Fast Switching & Tri-Client Reload
 - **One-Click Add Account (`+`)**: Click `+` in the top bar to safely back up your current login, clear the active login slot, and launch `agy` in a sized macOS Terminal window (`38×108`) for official browser OAuth sign-in. Once signed in, AgySwitch detects the new account automatically and surfaces a top **Save** capsule.
-- **Accelerated Single-Click & Shortcut Switching**: Click any account row to switch immediately, or press **`⌘↩`** to jump straight to the next available (non-cooling) account. `v0.2.2` introduces **Keychain metadata version caching**, avoiding redundant payload parses and making account switches and status refreshes noticeably snappier.
+- **Accelerated Single-Click & Shortcut Switching**: Click any account row to switch immediately, or press **`⌘↩`** to jump straight to the next available (non-cooling) account. Built-in **Keychain metadata version caching** avoids redundant payload parses and makes account switches and status refreshes snappy.
 - **Reliable Tri-Client Reload (Desktop + T3 Backend + CLI)**: Click **Reload Clients** on the post-switch banner (or enable **Auto-Reload Clients on Switch** in `⋯`) to:
   - Gracefully restart a running **`Antigravity.app`** with sanitized Electron/Node environment variables so it never fails to relaunch;
   - Recycle **`agy acp`** backend servers seamlessly without closing your open **T3 Code** windows;
   - Terminate stale terminal **`agy`** processes and **automatically verify the active Keychain credential after reload** so exiting processes cannot overwrite your newly switched account.
 - **Cooldown & Account Management**: Right-click any account row to mark a cooldown (`5h` / `3h` / `1h`), clear an active cooldown, rename its alias, or remove the snapshot.
 
-### 3. Automatic Quota-Exhaustion Switching (Passive Local Log Monitoring)
+### 2. Automatic Quota-Exhaustion Switching (Passive Local Log Monitoring)
 - When **Auto-switch on quota limit** is enabled, AgySwitch passively tails newly appended lines in `~/.gemini/antigravity-cli/log/cli-*.log` and `acp-server-*.log` (covering both terminal `agy` and T3 Code sessions)—**performing zero network polling**.
 - Accurately detects `RESOURCE_EXHAUSTED`, `QUOTA_EXHAUSTED`, `MODEL_CAPACITY_EXHAUSTED`, and `429` rate-limit errors:
   - **False-Positive Filtering**: Filters out glog thread IDs containing `429` and non-error configuration lines.
@@ -103,9 +97,13 @@ Heavy daily usage of frontier models in Google Antigravity CLI (`agy`) quickly e
   - **Smart Cooldown Duration**: Parses the official quota reset timestamp from the log whenever available; otherwise falls back to your selected default cooldown (`5h` / `3h` / `1h`).
   - **Native Notification**: Automatically activates the next available account and posts a macOS system notification.
 
+### 3. 100% Zero-Network Account Safety by Design
+- **Verifiable Zero Outbound Traffic**: Every file under `Sources/` performs strictly local macOS Keychain and file system operations—no `URLSession`, no sockets, no background telemetry, and no calls to non-public internal quota endpoints.
+- **In-App Safety Notice**: The top-right `⋯` menu includes a **"Quota Check Disabled (Safety)"** entry explaining why direct internal quota API queries are disabled to prevent Google account flagging, reminding you to check remaining quotas directly inside the official Antigravity client.
+
 ### 4. Ultra-Lightweight Native macOS Menu Bar App
 - Built with **100% pure Swift, SwiftUI, and AppKit** with **zero third-party dependencies**.
-- The entire `AgySwitch.app` bundle is only **~2.5 MB** (**~1.6 MB** main executable), runs strictly as a menu bar agent (`LSUIElement`, no Dock icon clutter), features unified native hover feedback across top-bar controls, adapts automatically to macOS Light and Dark appearances, and supports one-click **Launch at Login**.
+- The entire `AgySwitch.app` bundle is only **~2.5 MB** (**~1.6 MB** main executable), runs strictly as a menu bar agent (`LSUIElement`, no Dock icon clutter), features a compact panel layout with unified native hover feedback across top-bar controls, adapts automatically to macOS Light and Dark appearances, and supports one-click **Launch at Login**.
 - **Built-in Bilingual UI (English & 简体中文)**: Automatically follows your macOS system language by default, or lets you switch between English and Simplified Chinese instantly from the top-right `⋯` menu without restarting.
 
 ---
@@ -121,14 +119,14 @@ AgySwitch touches only the single macOS Keychain item responsible for `agy` auth
 3. **Stdin Pipe Execution (`security -i`)**: Sensitive Keychain write commands are piped through standard input to `/usr/bin/security -i` so credentials never appear in process command-line arguments (`ps`).
 4. **Silent Token-Refresh Write-Back**: Before switching away from the currently active account, AgySwitch automatically syncs the live Keychain payload back to its vault snapshot so silent background OAuth token refreshes performed by `agy` are never lost.
 5. **Byte-for-Byte Read-Back & Post-Reload Verification**: Every switch immediately reads back the written Keychain entry and verifies it byte-for-byte against the target snapshot—and re-verifies after client reloads so terminating `agy` processes cannot revert the active credential.
-6. **Ephemeral Read-Only Quota Requests (Toggleable to Strict Zero-Network)**:
-   - Implemented in [`Sources/AgySwitchCore/Quota.swift`](Sources/AgySwitchCore/Quota.swift) using `URLSessionConfiguration.ephemeral` with cookies, caches, credential storage, and HTTP redirects (`NoRedirect`) completely disabled.
-   - Triggered only on user hover (`250ms` debounce) to query Google's official read-only quota endpoints (`https://aicode.googleapis.com/v1alpha:fetchQuotaStatus` and `https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`) using the snapshot's existing Bearer token.
-   - Never proxies conversation traffic, never polls in the background, never contacts third-party servers, and can be completely disabled via **Show Quota on Hover** in `⋯`.
+6. **100% Zero Network Code**: The application codebase (`Sources/`) contains zero network clients, zero proxy servers, and zero external dependencies. Every conversation and authentication request continues to flow 100% directly between the official `agy` binary and Google.
 
 ---
 
 ## Frequently Asked Questions (FAQ)
+
+**Q: Why was hover quota inspection removed in `v0.2.4`?**  
+Google has explicitly advised external clients (see T3 Code PR #43026) that Antigravity only supports the official ACP protocol externally, and directly calling internal non-ACP quota endpoints (`cloudcode-pa.googleapis.com`) can cause user Google accounts to be flagged. To prioritize account safety, `v0.2.4` removes all quota query and `URLSession` code so AgySwitch operates with **100% zero network requests**. You can check remaining quota directly inside the official Antigravity client, and click **"Quota Check Disabled (Safety)"** in the `⋯` menu anytime for details.
 
 **Q: Why does a running `agy` session or desktop app still use the old account right after I switch?**  
 `agy`, `Antigravity.app`, and T3 Code's `agy acp` backend read the macOS Keychain credential into memory when a session starts. After switching accounts in AgySwitch, simply click **Reload Clients** on the prompt banner (or enable **Auto-Reload Clients on Switch** in the `⋯` menu) to automatically restart `Antigravity.app`, recycle T3 Code's `agy acp` backend without closing your windows, and stop stale terminal `agy` processes.
@@ -136,8 +134,8 @@ AgySwitch touches only the single macOS Keychain item responsible for `agy` auth
 **Q: How do I add multiple Google Antigravity CLI accounts?**  
 Click the `+` button in the AgySwitch top bar. AgySwitch will automatically back up your current account, clear the active login slot, and open a Terminal window running `agy` for official browser OAuth sign-in. Once signed in, click **Save** in AgySwitch. You can also log in manually via `agy` in your terminal and click **Save** when AgySwitch detects the unsaved login.
 
-**Q: Does AgySwitch route traffic through a proxy or make background network calls?**  
-AgySwitch runs **no local proxy, no OAuth gateway, and zero background polling**. Every `agy` conversation and tool call goes 100% directly from the official `agy` binary to Google. The only network code in the entire repository ([`Sources/AgySwitchCore/Quota.swift`](Sources/AgySwitchCore/Quota.swift)) is an on-demand, read-only request to Google's official quota endpoints (`aicode.googleapis.com` and `daily-cloudcode-pa.googleapis.com`) using an ephemeral, no-cookie, no-redirect `URLSession` when you hover over an account row—and you can turn off **Show Quota on Hover** in `⋯` anytime for strict zero-network operation.
+**Q: Does AgySwitch route traffic through a proxy or make any network calls?**  
+No. AgySwitch runs **no local proxy, no OAuth gateway, zero background polling, and zero outbound network requests**. Every `agy` conversation and tool call goes 100% directly from the official `agy` binary to Google.
 
 **Q: Does AgySwitch support Intel Macs, Windows, or Linux?**  
 AgySwitch is built specifically for macOS Keychain and currently targets **macOS 14.0+ on Apple Silicon (`arm64`)**.
