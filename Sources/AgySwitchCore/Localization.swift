@@ -99,7 +99,6 @@ public struct LocalizedText: Equatable {
 
 public enum AppLabel: CaseIterable {
     case autoReload, reloadMenu, reloadClients, reloadingClients, reloadResult
-    case quotaRiskMenu, quotaRiskTitle, quotaRiskDetail
     case language, followSystem
     case listening, listenerStopped, refresh
     case enableLoginItem, disableLoginItem, openLogs, inspect, quit, more
@@ -115,11 +114,6 @@ public enum AppLabel: CaseIterable {
 
     public var text: LocalizedText {
         switch self {
-        case .quotaRiskMenu: return .init("Quota Check Disabled (Safety)", "额度查询已停用（防风控）")
-        case .quotaRiskTitle: return .init("Internal quota API check removed", "已移除内部额度接口查询")
-        case .quotaRiskDetail:
-            return .init("Google warns calling internal quota APIs may flag accounts. Check limits in official clients.",
-                         "Google 提示调用内部配额接口可能触发账号标记，请在官方客户端查看额度")
         case .autoReload: return .init("Auto-Reload Clients on Switch", "切号后自动重载客户端")
         case .reloadMenu: return .init("Reload agy & Desktop", "重载 agy 与桌面版")
         case .reloadClients: return .init("Reload Clients", "立即重载")

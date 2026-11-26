@@ -6,7 +6,7 @@ import UserNotifications
 
 @MainActor
 final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
-    private let model: MenuModel
+    private let model = MenuModel()
     private let clientReloader = ClientReloader(processes: LocalProcessControl(), desktop: WorkspaceDesktopControl())
     private let autoReloadKey = "autoReloadClientsOnSwitch"
     private var clientReloadTask: Task<Void, Never>?
@@ -20,12 +20,6 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDeleg
     private var refreshFeedbackRequested = false
     private var language: DisplayLanguage { model.displayLanguage }
 
-    init(model: MenuModel = MenuModel()) {
-        self.model = model
-        super.init()
-        model.send = { [weak self] in self?.handle($0) }
-    }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         preferences.register(defaults: [autoReloadKey: false, "autoWatchEnabled": false, "defaultCooldownSeconds": 18_000,
                                         AppLanguage.preferenceKey: AppLanguage.system.rawValue])
@@ -35,6 +29,7 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDeleg
         let cooldown = preferences.integer(forKey: "defaultCooldownSeconds")
         if [18_000, 10_800, 3_600].contains(cooldown) { model.cooldown = cooldown }
         model.opensAtLogin = (try? loginItem.enabled()) ?? false
+        model.send = { [weak self] in self?.handle($0) }
         work.onUpdate = { [weak self] in self?.watcherUpdated($0) }
         NotificationCenter.default.addObserver(self, selector: #selector(systemLocaleChanged),
                                                name: NSLocale.currentLocaleDidChangeNotification, object: nil)
@@ -99,8 +94,6 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDeleg
 
     private func handle(_ action: MenuAction) {
         switch action {
-        case .showQuotaRiskNotice:
-            show(MenuFeedback(.warning, .quotaRiskTitle, detail: .quotaRiskDetail))
         case .setAutoReload(let enabled):
             model.autoReload = enabled
             preferences.set(enabled, forKey: autoReloadKey)

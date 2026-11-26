@@ -31,18 +31,6 @@ final class LocalizationTests: XCTestCase {
         }
     }
 
-    func testQuotaRiskLabels() {
-        for (label, english, chinese) in [
-            (AppLabel.quotaRiskMenu, "Quota Check Disabled (Safety)", "额度查询已停用（防风控）"),
-            (.quotaRiskTitle, "Internal quota API check removed", "已移除内部额度接口查询"),
-            (.quotaRiskDetail, "Google warns calling internal quota APIs may flag accounts. Check limits in official clients.",
-             "Google 提示调用内部配额接口可能触发账号标记，请在官方客户端查看额度")
-        ] {
-            XCTAssertEqual(DisplayLanguage.en[label], english)
-            XCTAssertEqual(DisplayLanguage.zhHans[label], chinese)
-        }
-    }
-
     func testReloadLabelsAndResultVariants() {
         for (label, english, chinese) in [
             (AppLabel.autoReload, "Auto-Reload Clients on Switch", "切号后自动重载客户端"),

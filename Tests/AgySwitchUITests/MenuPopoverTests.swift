@@ -1,5 +1,4 @@
 import AgySwitchCore
-@testable import AgySwitch
 @testable import AgySwitchUI
 import AppKit
 import Combine
@@ -74,10 +73,8 @@ final class MenuPopoverTests: XCTestCase {
     }
 
     @MainActor
-    func testHostedPanelKeepsItsSizeThroughRefreshesBusyStatesAndFeedback() throws {
+    func testHostedPanelKeepsItsSizeThroughRefreshesBusyStatesAndFeedback() {
         _ = NSApplication.shared
-        // Enable SwiftUI accessibility nodes for the test host without starting an assistive client.
-        NSApp.accessibilitySetValue(true, forAttribute: .init(rawValue: "AXEnhancedUserInterface"))
         let anchor = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 32, height: 32),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         anchor.alphaValue = 0
@@ -132,25 +129,10 @@ final class MenuPopoverTests: XCTestCase {
             assertStable()
             model.feedback = .switchResult(target: String(repeating: "w", count: 48), changed: true, offersReload: true)
             assertStable()
-            let delegate = ApplicationDelegate(model: model)
-            let menu = MoreButton(model: model).makeMenu()
-            let displayLanguage = model.displayLanguage
-            let riskItem = try XCTUnwrap(menu.item(withTitle: displayLanguage[.quotaRiskMenu]))
-            XCTAssertTrue(riskItem.isEnabled)
-            XCTAssertEqual(riskItem.state, .off)
-            menu.performActionForItem(at: menu.index(of: riskItem))
-            XCTAssertEqual(model.feedback, MenuFeedback(.warning, .quotaRiskTitle, detail: .quotaRiskDetail))
-            assertStable()
-
-            let window = try XCTUnwrap(host.view.window)
-            let contentFrame = window.convertToScreen(host.view.convert(host.view.bounds, to: nil))
-            for label in [AppLabel.quotaRiskTitle, .quotaRiskDetail] {
-                let text = displayLanguage[label]
-                let frame = try XCTUnwrap(visibleStaticText(text, in: window), text)
-                XCTAssertTrue(contentFrame.insetBy(dx: -0.5, dy: -0.5).contains(frame), text)
-                XCTAssertGreaterThan(frame.height, 0, text)
-            }
-            withExtendedLifetime(delegate) {}
+            let menuTitles = MoreButton(model: model).makeMenu().items.map(\.title)
+            XCTAssertFalse(menuTitles.contains {
+                $0.localizedCaseInsensitiveContains("quota") || $0.contains("额度") || $0.contains("风控")
+            })
 
             model.feedback = nil
             assertStable()
@@ -166,25 +148,6 @@ final class MenuPopoverTests: XCTestCase {
             XCTAssertGreaterThan(withSave.height, compact.height)
             assertSize(settledSize(popover, host: host), equals: withSave)
         }
-    }
-
-    @MainActor
-    private func visibleStaticText(_ text: String, in element: Any) -> NSRect? {
-        guard let element = element as? NSObject else { return nil }
-        // SwiftUI's accessibility nodes expose these selectors without conforming to NSAccessibilityProtocol.
-        func attribute(_ key: String) -> Any? {
-            guard element.responds(to: NSSelectorFromString(key)) else { return nil }
-            return element.value(forKey: key)
-        }
-        let role = attribute("accessibilityRole") as? String
-        guard role != NSAccessibility.Role.scrollArea.rawValue else { return nil }
-        if role == NSAccessibility.Role.staticText.rawValue, attribute("accessibilityValue") as? String == text {
-            return (attribute("accessibilityFrame") as? NSValue)?.rectValue
-        }
-        for child in attribute("accessibilityChildren") as? [Any] ?? [] {
-            if let frame = visibleStaticText(text, in: child) { return frame }
-        }
-        return nil
     }
 
     @MainActor

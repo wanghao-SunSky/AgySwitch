@@ -3,7 +3,7 @@ import SwiftUI
 
 public enum MenuAction {
     case refresh, checkLogin, inspect, openLogs, toggleLoginItem, quit
-    case reloadClients, setAutoReload(Bool), showQuotaRiskNotice
+    case reloadClients, setAutoReload(Bool)
     case beginAddAccount
     case save(alias: String, email: String)
     case select(String), next, rename(id: String, alias: String), remove(String)
@@ -461,7 +461,7 @@ public struct MenuPopoverView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 60, alignment: .topLeading)
+            .frame(height: 48, alignment: .topLeading)
         }
     }
 
@@ -587,7 +587,6 @@ struct MoreButton: View {
             item.isEnabled = enabled
             menu.addItem(item)
         }
-        add(.quotaRiskMenu, .showQuotaRiskNotice)
         add(.autoReload, .setAutoReload(!model.autoReload), checked: model.autoReload)
         add(.reloadMenu, .reloadClients, enabled: !model.busy)
         menu.addItem(.separator())

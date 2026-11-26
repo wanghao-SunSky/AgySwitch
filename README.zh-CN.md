@@ -2,12 +2,9 @@
 
 [English](README.md) | 简体中文
 
-> **AgySwitch**（`v0.2.4`）是一款专为 **Google Antigravity CLI（`agy`）** 打造的超轻量（**~2.5 MB**）、**100% 零网络请求**的 **macOS 原生菜单栏多账号切换工具**——100% 纯 Swift & SwiftUI 构建，**零第三方依赖**、**不做本地反代或 OAuth 网关**，基于 macOS Keychain 无损快照秒切账号，支持**顶栏 `+` 一键录入新号**、**单击或 `⌘↩` 秒切**、**三端一键联动重载（Antigravity 桌面版 + T3 Code `agy acp` 后端 + 终端 `agy`）**、**纯本地被动日志监听的额度耗尽自动切号**，并内置**简体中文与英文双语界面**（默认跟随系统或菜单内实时切换）。
+> **AgySwitch**（`v0.2.5`）是一款专为 **Google Antigravity CLI（`agy`）** 打造的超轻量（**~2.5 MB**）、**100% 零网络请求**的 **macOS 原生菜单栏多账号切换工具**——100% 纯 Swift & SwiftUI 构建，**零第三方依赖**、**不做本地反代或 OAuth 网关**，基于 macOS Keychain 无损快照秒切账号，支持**顶栏 `+` 一键录入新号**、**单击或 `⌘↩` 秒切**、**三端一键联动重载（Antigravity 桌面版 + T3 Code `agy acp` 后端 + 终端 `agy`）**、**纯本地被动日志监听的额度耗尽自动切号**，并内置**简体中文与英文双语界面**（默认跟随系统或菜单内实时切换）。
 
 **AgySwitch** 常驻 macOS 顶部菜单栏（`⇄`），专为高频使用 `agy` 的开发者设计。无论是趁黑五或优惠活动备两三个 **Google AI Pro** 账号轮换使用、以更低成本用出接近 **Ultra** 的高阶模型额度体验，还是在工作号与个人号之间无缝切换，AgySwitch 都能做到单击或快捷键秒切、额度见底自动轮换——**全程 100% 零联网请求**，不代理任何对话流量、不做后台轮询，也不修改 `agy` 的任何业务配置、MCP、Skills 或对话历史。
-
-> [!IMPORTANT]
-> **`v0.2.4` 重要安全更新（恢复全仓 100% 零网络请求）**：Google 已明确提示外部客户端（参考 T3 Code PR #43026），Antigravity 对外仅支持官方 ACP 协议，直接调用非公开内部额度接口（`cloudcode-pa.googleapis.com`）可能导致用户的 Google 账号被风控标记（flagged）。为确保账号绝对安全，**`v0.2.4` 已彻底移除所有内部配额查询与 `URLSession` 网络代码**，全仓 `Sources/` 恢复为 **100% 可验证的零网络请求**；右上角 `⋯` 菜单对应项已改为「**额度查询已停用（防风控）**」安全提示，引导用户直接在官方 Antigravity 客户端内查看额度。**强烈建议所有 `v0.2.2` / `v0.2.3` 用户立即升级。**
 
 ---
 
@@ -38,8 +35,8 @@ curl -fsSL https://raw.githubusercontent.com/wanghao-SunSky/AgySwitch/main/scrip
 
 ### 方式三：手动下载安装包
 
-- 📦 [**下载 DMG 安装包（`AgySwitch-v0.2.4-macos-arm64.dmg`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.4/AgySwitch-v0.2.4-macos-arm64.dmg)
-- 🗂️ [**下载 ZIP 压缩包（`AgySwitch-v0.2.4-macos-arm64.zip`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.4/AgySwitch-v0.2.4-macos-arm64.zip)
+- 📦 [**下载 DMG 安装包（`AgySwitch-v0.2.5-macos-arm64.dmg`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.5/AgySwitch-v0.2.5-macos-arm64.dmg)
+- 🗂️ [**下载 ZIP 压缩包（`AgySwitch-v0.2.5-macos-arm64.zip`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.5/AgySwitch-v0.2.5-macos-arm64.zip)
 - 🔗 [**Releases 页面（含 `SHA256SUMS.txt` 校验值）**](https://github.com/wanghao-SunSky/AgySwitch/releases/latest)
 
 **手动下载首次打开说明**：因未购买 Apple 付费开发者证书、采用本地 ad-hoc 签名，通过浏览器手动下载后拖入 `/Applications` 打开时，若 macOS 提示「已损坏」或「无法验证开发者」，运行一行命令移除浏览器隔离属性即可：
@@ -64,11 +61,11 @@ xattr -cr /Applications/AgySwitch.app
 
 重度使用 Google Antigravity CLI（`agy`）的高阶模型时，单个账号的 5 小时或周配额窗口往往很快见底。不少开发者会趁黑五或促销活动备两三个 **Google AI Pro** 账号轮换使用，用远低于单买 Ultra 的成本获得接近 Ultra 的可用额度上限。**AgySwitch** 与常见切号方案的核心区别如下：
 
-| 对比维度 | **AgySwitch（`v0.2.4`）** | 本地反代 / OAuth 网关类工具 | 官方手动 `/logout` 重登 |
+| 对比维度 | **AgySwitch（`v0.2.5`）** | 本地反代 / OAuth 网关类工具 | 官方手动 `/logout` 重登 |
 | :--- | :--- | :--- | :--- |
 | **对话流量链路** | **100% 官方原版 `agy` 直连** | 第三方网关代理转发 | 官方原版 `agy` 直连 |
 | **网络请求行为** | **100% 零网络请求**（纯本地 Keychain 快照与只读日志文件操作） | 持续后台轮询 + 代理转发对话请求 | 无 |
-| **账号防风控安全性** | **零非公开内部接口调用**（不调 `cloudcode-pa.googleapis.com`、不伪造 OAuth 客户端） | 常调用内部配额接口或代持 OAuth Token | 官方浏览器 OAuth |
+| **登录凭证方式** | **官方原版 `agy` 浏览器 OAuth**（仅做本地 Keychain 无损快照） | 自建 OAuth 客户端或代持转发 Token | 官方浏览器 OAuth |
 | **切号速度** | 菜单栏单击或 `⌘↩` 秒切（内置 Keychain 元数据版本缓存提速） | 自动路由 | 每次登出 + 开浏览器重新 OAuth 授权 |
 | **客户端重载** | 一键或切号自动联动重载 **`Antigravity.app` + T3 Code `agy acp` + 终端 `agy`** | 网关层热切 | 需手动重启客户端或终端 |
 | **额度用光自动切号** | 支持（纯本地被动监听日志，零网络探测） | 支持（网关侧拦截报错） | 不支持 |
@@ -97,12 +94,8 @@ xattr -cr /Applications/AgySwitch.app
   - **智能冷却计时**：优先从报错日志中解析官方配额重置时间；若日志未携带重置时刻，则按面板设定的 `5h / 3h / 1h` 默认冷却时长标记当前账号；
   - **系统通知提醒**：自动切换到下一个可用账号后，立即弹出 macOS 原生系统通知。
 
-### 3. 100% 零联网防风控设计
-- **全仓可验证的零网络请求**：`Sources/` 下所有源码仅执行本机 macOS Keychain 与本地文件读写，不含任何 `URLSession`、Socket、遥测上报或非公开配额接口调用，从根源上杜绝因外部工具调用内部 API 导致的账号被标记风险。
-- **内置防风控安全提示**：右上角 `⋯` 菜单提供「**额度查询已停用（防风控）**」说明入口，点击即可查看停用内部配额接口的原因，并提示直接在官方 Antigravity 客户端内安全查看剩余额度。
-
-### 4. 极致轻量，原生菜单栏常驻
-- **100% 纯原生 Swift + SwiftUI + AppKit** 实现，**零第三方依赖**。
+### 3. 极致轻量、100% 零网络请求，原生菜单栏常驻
+- **100% 纯原生 Swift + SwiftUI + AppKit** 实现，**零第三方依赖**、**全仓零网络代码**（`Sources/` 仅做本机 Keychain 与本地文件读写，不含任何 `URLSession`、Socket 或遥测上报）。
 - 整个 `AgySwitch.app` 仅 **~2.5 MB**（主可执行文件 **~1.6 MB**），常驻顶部菜单栏（`LSUIElement`，不占 Dock 栏），面板布局紧凑简洁，顶栏按钮统一原生悬停反馈，自动跟随 macOS 浅色 / 深色外观，支持一键开启**登录时启动**。
 - **内置中/英双语界面**：默认自动跟随 macOS 系统语言，也可在右上角 `⋯` 菜单随时一键切换「跟随系统 / English / 简体中文」，无需重启即时生效。
 
@@ -124,9 +117,6 @@ AgySwitch 仅操作 macOS Keychain 中与 `agy` 登录态直接相关的单一�
 ---
 
 ## 常见问题 · FAQ
-
-**Q：为什么 `v0.2.4` 移除了鼠标悬停查看剩余额度功能？**  
-Google 已明确提示外部客户端（参考 T3 Code PR #43026），Antigravity 对外仅支持官方 ACP 协议，直接调用非公开内部额度接口（`cloudcode-pa.googleapis.com`）可能导致用户的 Google 账号被风控标记（flagged）。为把账号安全放在第一位，`v0.2.4` 彻底删除了配额查询及所有 `URLSession` 代码，恢复全仓 **100% 零网络请求**。需要查看额度时，请直接在官方 Antigravity 客户端内查看；你也可以随时点击右上角 `⋯` 菜单中的「**额度查询已停用（防风控）**」了解详情。
 
 **Q：切号后为什么正在跑的客户端或对话还是旧账号？**  
 因为 `agy`、`Antigravity.app` 桌面端以及 T3 Code 的 `agy acp` 后端在启动时才会将 macOS Keychain 凭证读入内存。在 AgySwitch 中切换账号后，直接点击面板上的「**立即重载**」（或在右上角 `⋯` 菜单开启「**切号后自动重载客户端**」），即可自动重启 `Antigravity.app`、无缝热重启 T3 Code 的 `agy acp` 后端（不关窗口）并清理旧终端 `agy` 进程。
