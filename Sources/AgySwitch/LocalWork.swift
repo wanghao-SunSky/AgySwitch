@@ -43,25 +43,13 @@ final class LocalWork {
         }
     }
 
-    static func renewLogin(using executable: URL) throws {
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = ["models"]
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        let finished = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in finished.signal() }
-        try process.run()
-        if finished.wait(timeout: .now() + 8) == .timedOut {
-            if process.isRunning { process.terminate() }
-            if finished.wait(timeout: .now() + 1) == .timedOut, process.isRunning {
-                kill(process.processIdentifier, SIGKILL)
-            }
-            process.waitUntilExit()
-            throw QuotaError.unavailable
-        }
-        guard process.terminationStatus == 0 else { throw QuotaError.expired }
+    private let quotaWork = DispatchGroup()
+
+    @MainActor func loadQuota(accountID: String, executable: URL?) async throws -> [ModelQuota] {
+        try Task.checkCancellation()
+        quotaWork.enter()
+        defer { quotaWork.leave() }
+        return try await pool.loadQuota(accountID: accountID, executable: executable)
     }
 
     func configure(automatic: Bool, cooldown: Int) {
@@ -83,7 +71,7 @@ final class LocalWork {
     func finish(_ completion: @escaping () -> Void) {
         queue.async {
             self.stopWatcher()
-            DispatchQueue.main.async { completion() }
+            self.quotaWork.notify(queue: .main, execute: completion)
         }
     }
 

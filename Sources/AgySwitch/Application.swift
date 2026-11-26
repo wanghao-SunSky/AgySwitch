@@ -26,20 +26,7 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDeleg
         model.language = preferences.string(forKey: AppLanguage.preferenceKey).flatMap(AppLanguage.init(rawValue:)) ?? .system
         model.quotaEnabled = preferences.bool(forKey: "quotaOnHover")
         model.loadQuota = { [work] id in
-            let token = try await work.read { try $0.quotaAccessToken(accountID: id) }
-            try Task.checkCancellation()
-            do { return try await QuotaClient.fetch(accessToken: token) }
-            catch QuotaError.expired {
-                try Task.checkCancellation()
-                guard let executable = Self.agyExecutable() else { throw QuotaError.expired }
-                let fresh = try await work.read { pool in
-                    try pool.renewActiveQuotaToken(accountID: id, rejected: token) {
-                        try LocalWork.renewLogin(using: executable)
-                    }
-                }
-                try Task.checkCancellation()
-                return try await QuotaClient.fetch(accessToken: fresh)
-            }
+            try await work.loadQuota(accountID: id, executable: Self.agyExecutable())
         }
         model.autoReload = preferences.bool(forKey: autoReloadKey)
         model.automatic = preferences.bool(forKey: "autoWatchEnabled")
@@ -80,6 +67,7 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSPopoverDeleg
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        model.clearHover(cancelRequests: true)
         work.finish { sender.reply(toApplicationShouldTerminate: true) }
         return .terminateLater
     }

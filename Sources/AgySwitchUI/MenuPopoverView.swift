@@ -82,7 +82,7 @@ public final class MenuModel: ObservableObject {
         if let id { hover(id, inside: true) }
     }
 
-    @MainActor public func clearHover(cancelRequests: Bool = false) {
+    @MainActor public func clearHover(cancelRequests: Bool = true) {
         if hoveredAccount != nil { hoveredAccount = nil }
         hoverTask?.cancel()
         hoverTask = nil

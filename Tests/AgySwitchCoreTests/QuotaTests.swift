@@ -93,6 +93,7 @@ final class QuotaTests: XCTestCase {
                 keychain.active = try credential(b.email, marker: "fixture-new")
             }
             XCTAssertEqual(fresh, "fixture-new")
+            XCTAssertEqual(try keychain.read(service: "agy-acct-vault", account: b.id), keychain.active)
             XCTAssertThrowsError(try pool.renewActiveQuotaToken(accountID: b.id, rejected: fresh) {})
         }
     }

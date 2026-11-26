@@ -61,6 +61,26 @@ final class MenuPopoverTests: XCTestCase {
         XCTAssertNil(model.quotaDisplay)
     }
 
+    @MainActor func testLeavingRowCancelsTheUnderlyingQuotaLoad() async {
+        let model = MenuModel()
+        let started = expectation(description: "Quota load started")
+        let cancelled = expectation(description: "Quota load cancelled")
+        model.loadQuota = { _ in
+            started.fulfill()
+            do { try await Task.sleep(for: .seconds(5)) }
+            catch is CancellationError {
+                cancelled.fulfill()
+                throw CancellationError()
+            }
+            return []
+        }
+        model.hover("a", inside: true)
+        await fulfillment(of: [started], timeout: 2)
+        model.hover("a", inside: false)
+        await fulfillment(of: [cancelled], timeout: 2)
+        XCTAssertNil(model.quotaDisplay)
+    }
+
     func testReturningFromLoginShowsSaveEvenWhenSnapshotIsUnchangedAndErrorsRecover() {
         let signedOut = PoolSnapshot()
         let fresh = PoolSnapshot(currentEmail: "new@example.com")

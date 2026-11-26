@@ -36,6 +36,7 @@ final class LocalizationTests: XCTestCase {
             (AppLabel.autoReload, "Auto-Reload Clients on Switch", "切号后自动重载客户端"),
             (.quotaOnHover, "Quota on Hover", "悬停查看额度"),
             (.loadingQuota, "Loading quota…", "正在获取额度…"),
+            (.quotaExpired, "Sign-in expired. Switch to this account and sign in again in agy", "登录已失效，请切到此账号并重新登录 agy"),
             (.quotaFailed, "Quota unavailable", "暂时无法获取额度"),
             (.reloadMenu, "Reload agy & Desktop", "重载 agy 与桌面版"),
             (.reloadClients, "Reload Clients", "立即重载"),

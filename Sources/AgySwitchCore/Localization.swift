@@ -121,7 +121,7 @@ public enum AppLabel: CaseIterable {
         case .quotaOnHover: return .init("Quota on Hover", "悬停查看额度")
         case .loadingQuota: return .init("Loading quota…", "正在获取额度…")
         case .quotaFailed: return .init("Quota unavailable", "暂时无法获取额度")
-        case .quotaExpired: return .init("Open agy with this account to renew its login", "请用此账号打开 agy 以续期登录")
+        case .quotaExpired: return .init("Sign-in expired. Switch to this account and sign in again in agy", "登录已失效，请切到此账号并重新登录 agy")
         case .resetsIn: return .init("Resets in", "重置剩余")
         case .autoReload: return .init("Auto-Reload Clients on Switch", "切号后自动重载客户端")
         case .reloadMenu: return .init("Reload agy & Desktop", "重载 agy 与桌面版")

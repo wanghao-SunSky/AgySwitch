@@ -64,40 +64,119 @@ public final class AccountPool {
         }
     }
 
+    private struct QuotaLogin {
+        let account: Account
+        let credential: QuotaCredential
+        let isActive: Bool
+        let saved: Data?
+    }
+
+    private func quotaLogin(_ id: String, registry: Registry) throws -> QuotaLogin {
+        let account = registry.accounts[try index(for: id, in: registry)]
+        let login = try active()
+        let isActive = login?.identity.email.caseInsensitiveCompare(account.email) == .orderedSame
+        let saved = try vault.read(account)
+        guard let raw = isActive ? login?.raw : saved else { throw AppError.missingSnapshot }
+        return QuotaLogin(account: account, credential: try QuotaCredential(raw, email: account.email),
+                          isActive: isActive, saved: saved)
+    }
+
     public func quotaAccessToken(accountID: String) throws -> String {
-        try store.locked { registry in
-            let account = registry.accounts[try index(for: accountID, in: registry)]
-            let raw: Data
-            if let login = try active(), login.identity.email.caseInsensitiveCompare(account.email) == .orderedSame {
-                raw = login.raw
-            } else {
-                guard let saved = try vault.read(account) else { throw AppError.missingSnapshot }
-                raw = saved
-            }
-            guard try Identity.parse(raw).email.caseInsensitiveCompare(account.email) == .orderedSame,
-                  let token = try Identity.credentialObject(raw)["token"] as? [String: Any],
-                  let bearer = token["access_token"] as? String, !bearer.isEmpty else { throw AppError.invalidCredential }
-            return bearer
+        try store.locked { try quotaLogin(accountID, registry: $0).credential.bearer }
+    }
+
+    public func loadQuota(accountID: String, executable: URL?) async throws -> [ModelQuota] {
+        try await loadQuota(accountID: accountID, fetch: QuotaClient.fetch) { input in
+            guard let executable else { throw QuotaError.unavailable }
+            return try QuotaRenewer(executable: executable).renew(input: input, checkCancellation: Task.checkCancellation)
         }
     }
 
-    // agy owns the OAuth client registration. Its read-only model listing can renew
-    // the selected login. Hold the same lock as switchTo until the helper has exited.
-    public func renewActiveQuotaToken(accountID: String, rejected: String, renew: () throws -> Void) throws -> String {
-        try store.locked(write: true) { registry in
-            let account = registry.accounts[try index(for: accountID, in: registry)]
-            func bearer() throws -> String {
-                guard let login = try active(), login.identity.email.caseInsensitiveCompare(account.email) == .orderedSame,
-                      let fields = try Identity.credentialObject(login.raw)["token"] as? [String: Any],
-                      let token = fields["access_token"] as? String, !token.isEmpty else { throw QuotaError.expired }
-                return token
+    func loadQuota(accountID: String, fetch: (String) async throws -> [ModelQuota],
+                   renew: (Data?) throws -> Data?) async throws -> [ModelQuota] {
+        let login = try store.locked { try quotaLogin(accountID, registry: $0) }
+        try Task.checkCancellation()
+        if login.credential.expiry.map({ $0.timeIntervalSince1970 - clock() < 60 }) != true {
+            do { return try await fetch(login.credential.bearer) }
+            catch QuotaError.expired { /* Retry once with a renewed bearer. */ }
+        }
+        try Task.checkCancellation()
+        let fresh: String
+        if login.isActive {
+            do {
+                fresh = try renewActiveQuotaToken(accountID: accountID, rejected: login.credential.bearer) {
+                    _ = try renew(nil)
+                }
+            } catch ActiveRenewal.unchanged {
+                // The normal CLI can keep a locally valid bearer despite an early 401.
+                fresh = try renewIsolated(login, renew: renew)
             }
-            let current = try bearer()
-            if current != rejected { return current }
-            try renew()
-            let refreshed = try bearer()
-            guard refreshed != rejected else { throw QuotaError.expired }
-            return refreshed
+        } else {
+            fresh = try renewIsolated(login, renew: renew)
+        }
+        try Task.checkCancellation()
+        return try await fetch(fresh)
+    }
+
+    private enum ActiveRenewal: Error { case unchanged }
+
+    private func renewIsolated(_ login: QuotaLogin, renew: (Data?) throws -> Data?) throws -> String {
+        guard let output = try renew(login.credential.renewalInput()) else { throw QuotaError.unavailable }
+        let raw = try login.credential.merging(output, now: clock())
+        let fresh = try QuotaCredential(raw, email: login.account.email)
+        return try store.locked(write: true) { registry in
+            try Task.checkCancellation()
+            let current = try quotaLogin(login.account.id, registry: registry)
+            guard current.isActive == login.isActive, current.account.addedAt == login.account.addedAt,
+                  current.account.lastUsedAt == login.account.lastUsedAt,
+                  current.credential.raw == login.credential.raw, current.saved == login.saved else {
+                throw AppError.activeChanged
+            }
+            if login.isActive {
+                try keychain.write(service: MacKeychain.activeService, account: MacKeychain.activeAccount, raw: raw)
+                guard try readActive() == raw else { throw AppError.switchVerification }
+            }
+            try vault.write(current.account, raw: raw)
+            return fresh.bearer
+        }
+    }
+
+    public func renewActiveQuotaToken(accountID: String, rejected: String, renew: () throws -> Void) throws -> String {
+        // The normal CLI writes the shared Keychain itself. Pin the selection against CLI/App
+        // switches with a reader lock. Only the subsequent vault write needs an exclusive lock.
+        let (original, updated) = try store.locked { registry in
+            let before = try quotaLogin(accountID, registry: registry)
+            guard before.isActive else { throw AppError.activeChanged }
+            if before.credential.bearer == rejected { try renew() }
+            let after = try quotaLogin(accountID, registry: registry)
+            guard after.isActive else { throw AppError.activeChanged }
+            guard after.credential.bearer != rejected else { throw ActiveRenewal.unchanged }
+            return (before, after)
+        }
+        return try store.locked(write: true) { registry in
+            try Task.checkCancellation()
+            let current = try quotaLogin(accountID, registry: registry)
+            guard current.isActive, current.credential.raw == updated.credential.raw,
+                  current.account.addedAt == updated.account.addedAt,
+                  current.saved == original.saved else { throw AppError.activeChanged }
+            if original.saved != current.credential.raw {
+                var raw = current.credential.raw
+                if (current.credential.token["refresh_token"] as? String)?.isEmpty != false
+                    || current.credential.object["writer_id"] == nil {
+                    var base = original.credential
+                    if let saved = original.saved {
+                        let prior = try QuotaCredential(saved, email: current.account.email)
+                        let merged = try prior.preservingFields(in: base)
+                        base = try QuotaCredential(merged, email: current.account.email)
+                    }
+                    if (current.credential.token["refresh_token"] as? String)?.isEmpty != false
+                        || base.object["writer_id"] != nil {
+                        raw = try base.preservingFields(in: current.credential)
+                    }
+                }
+                try vault.write(current.account, raw: raw)
+            }
+            return current.credential.bearer
         }
     }
 
