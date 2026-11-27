@@ -9,49 +9,88 @@ struct QuotaEvent: Equatable {
 
 enum QuotaParser {
     // Logs may include arbitrary prompt text and credentials. Only typed event fields leave this parser.
-    private static let glog = regex(#"^([IWEF])\d{4}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+\d+\s+[^\]\r\n]+:\d+\]\s*"#)
+    private static let glog = regex(#"^([IWEF])\d{4}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+\d+\s+([^:\]\r\n]+):\d+\]\s*"#)
     private static let signals: [(ExhaustionReason, String)] = [
         (.stopReason, "STOP_REASON_QUOTA_EXHAUSTED"),
         (.errorCode, "ERROR_CODE_RESOURCE_EXHAUSTED"),
         (.capacity, "MODEL_CAPACITY_EXHAUSTED"),
         (.resource, "RESOURCE_EXHAUSTED|ResourceExhausted"),
-        (.quota, #"QUOTA_EXHAUSTED|out\s+of\s+quota|quota\s+(?:exhausted|exceeded)"#),
+        (.quota, #"QUOTA_EXHAUSTED|out\s+of\s+quota|quota\s+(?:exhausted|exceeded)|individual\s+quota\s+reached"#),
         (.http429, #"(?:HTTP(?:/\d+(?:\.\d+)?)?\s+|(?:status(?:[ _-]code)?|code)["']?\s*(?:[=:]\s*|\s+)["']?)429|Too\s+Many\s+Requests"#)
     ]
     private static let signal = regex(#"(?<!\w)(?:"# + signals.map { "(" + $0.1 + ")" }.joined(separator: "|") + #")(?!\w)"#, insensitive: true)
     private static let errorContext = regex(#"\b(?:error|failed|failure|exception|denied|rejected|returned|request|response|status|rate[ -]limit(?:ed)?)\b"#, insensitive: true)
-    private static let nonError = regex(#"\b(?:retry_model_capacity_exhausted|model[ _-]config(?:uration)?|feature[ _-]flag|loaded\s+config|retry[ _-]policy|example\s+(?:error|status)|expected\s+status)\b|^(?:user\s+prompt|model\s+output|prompt\s+text|response\s+text)\s*[:=]"#, insensitive: true)
+    private static let nonError = regex(
+        #"\b(?:retry_model_capacity_exhausted|model[ _-]config(?:uration)?|feature[ _-]flag|loaded\s+config|retry[ _-]policy|example\s+(?:error|status)|expected\s+status|oauth\s+setup\s+failed|dynamic\s+client\s+registration|client\s+registration\s+failed|invalid_client_metadata|mcp\s+server)\b|^(?:user\s+prompt|model\s+output|prompt\s+text|response\s+text)\s*[:=]|^Monitor\s+\S+\s+FINISHED\b"#,
+        insensitive: true
+    )
+    private static let ignoredSource = regex(
+        #"^(?:mcp[_a-z0-9-]*|.*_mcp(?:_.*)?|.*plugin.*|runner|browser|web[_a-z0-9-]*|fetch[_a-z0-9-]*|extract_searchable_content|reconcile_summaries|cache)\.go$"#,
+        insensitive: true
+    )
+    private static let googleQuotaContext = regex(
+        #"\b(?:cloudcode-pa\.googleapis\.com|aicode\.googleapis\.com|STOP_REASON_QUOTA_EXHAUSTED|ERROR_CODE_RESOURCE_EXHAUSTED|MODEL_CAPACITY_EXHAUSTED|RESOURCE_EXHAUSTED|ResourceExhausted|QUOTA_EXHAUSTED|out\s+of\s+quota|quota\s+(?:exhausted|exceeded|will\s+reset)|individual\s+quota\s+reached)\b"#,
+        insensitive: true
+    )
     private static let resetField = #"(?:reset[_ -]?time|quota[_ -]?reset[_ -]?time)"#
-    private static let relativeField = #"(?:try\s+again\s+in|retry[ _-]*after|quota\s+(?:will\s+)?reset\s+(?:in|after))"#
+    private static let relativeField = #"(?:try\s+again\s+in|retry[ _-]*after|(?:quota\s+(?:will\s+)?)?resets?\s+(?:in|after))"#
     private static let absolute = regex(#"\b"# + resetField + #"["']?\s*[:=]\s*["']?(\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2})(\.\d+)?([Zz]|[+-]\d{2}:?\d{2})?"#, insensitive: true)
-    private static let relative = regex(#"\b"# + relativeField + #"(?:["']?\s*[:=])?\s*["']?((?:[0-9]{1,8}[ \t\r\n\f\x0B]*[hms][ \t\r\n\f\x0B]*)+)(?![A-Za-z0-9_])"#, insensitive: true)
-    private static let durationPart = regex(#"([0-9]{1,8})\s*([hms])"#, insensitive: true)
+    private static let relative = regex(#"\b"# + relativeField + #"(?:["']?\s*[:=])?\s*["']?((?:[0-9]{1,8}[ \t\r\n\f\x0B]*[dhms][ \t\r\n\f\x0B]*)+)(?![A-Za-z0-9_])"#, insensitive: true)
+    private static let durationPart = regex(#"([0-9]{1,8})\s*([dhms])"#, insensitive: true)
     private static let resetContinuation = regex(#"^[\s{"']*(?:"# + resetField + "|" + relativeField + #")\b"#, insensitive: true)
     private static let account = regex(#"\b(?:id_token_email|idTokenEmail|account_email|accountEmail)["']?\s*[:=]\s*["']?("# + Validation.emailPattern + ")", insensitive: true)
+    private static let authResult = regex(#"\bapplyAuthResult:\s*email=("# + Validation.emailPattern + ")", insensitive: true)
 
     static func event(in lines: [String], now: Double, owner: String?) -> QuotaEvent? {
+        var ignoringContinuation = false
+        return event(in: lines, now: now, owner: owner, ignoringContinuation: &ignoringContinuation)
+    }
+
+    static func event(in lines: [String], now: Double, owner: String?,
+                      ignoringContinuation: inout Bool) -> QuotaEvent? {
         for (index, line) in lines.enumerated() {
-            let (body, severity) = split(line)
-            guard first(nonError, in: body) == nil, let matched = first(signal, in: body),
-                  let range = Range(matched.range, in: body) else { continue }
+            let (body, severity, source) = split(line)
+            if severity != nil {
+                ignoringContinuation = isIgnoredEntry(source: source, body: body)
+            }
+            guard !ignoringContinuation, first(nonError, in: body) == nil,
+                  let matched = first(signal, in: body), let range = Range(matched.range, in: body) else {
+                continue
+            }
             if severity == "I", first(errorContext, in: body) == nil,
                !body[..<range.lowerBound].trimmingCharacters(in: CharacterSet(charactersIn: " {\"'")).isEmpty {
                 continue
             }
-            let before = lines[max(index - 4, 0)..<index].reversed().map(split)
-                .prefix { $0.1 == nil }.map { $0.0 }.reversed()
-            let after = continuation(lines[(index + 1)..<min(lines.count, index + 7)])
-            let context = ([body] + before + after).joined(separator: "\n")
-            let email = first(account, in: context).flatMap { capture($0, at: 1, in: context)?.lowercased() } ?? owner
             guard let reasonIndex = signals.indices.first(where: { matched.range(at: $0 + 1).location != NSNotFound })
             else { continue }
-            return QuotaEvent(reason: signals[reasonIndex].0, resetAt: resetAt(in: context, now: now), email: email)
+            let reason = signals[reasonIndex].0
+            let before = lines[max(index - 4, 0)..<index].reversed().map(split)
+                .prefix { $0.1 == nil }.map { $0.0 }.reversed()
+            let after = continuation(lines[(index + 1)..<min(lines.count, index + 12)])
+            let context = ([body] + before + after).joined(separator: "\n")
+            if reason == .http429, severity == "W" || severity == "I", first(googleQuotaContext, in: context) == nil {
+                continue
+            }
+            let email = first(account, in: context).flatMap { capture($0, at: 1, in: context)?.lowercased() } ?? owner
+            return QuotaEvent(reason: reason, resetAt: resetAt(in: context, now: now), email: email)
         }
         return nil
     }
 
+    static func authEmail(in lines: [String]) -> String? {
+        var latest: String?
+        for line in lines {
+            let (body, _, source) = split(line)
+            if let source, source.lowercased() != "server_oauth.go" { continue }
+            if let match = first(authResult, in: body), let email = capture(match, at: 1, in: body) {
+                latest = email.lowercased()
+            }
+        }
+        return latest
+    }
+
     static func continuation<S: Sequence>(_ lines: S) -> [String] where S.Element == String {
-        lines.map(split).prefix { body, severity in
+        lines.map(split).prefix { body, severity, _ in
             severity == nil || first(resetContinuation, in: body) != nil
         }.map { $0.0 }
     }
@@ -79,18 +118,26 @@ enum QuotaParser {
             let total = durationPart.matches(in: duration, range: fullRange(duration)).reduce(0.0) { total, part in
                 let number = capture(part, at: 1, in: duration).flatMap(Double.init) ?? 0
                 let unit = capture(part, at: 2, in: duration)?.lowercased()
-                return total + number * (unit == "h" ? 3600 : unit == "m" ? 60 : 1)
+                let seconds: Double = unit == "d" ? 86_400 : unit == "h" ? 3600 : unit == "m" ? 60 : 1
+                return total + number * seconds
             }
             if total > 0, total <= 253_402_300 { return now + total }
         }
         return nil
     }
 
-    private static func split(_ line: String) -> (String, String?) {
+    private static func isIgnoredEntry(source: String?, body: String) -> Bool {
+        if let source, first(ignoredSource, in: source) != nil { return true }
+        return first(nonError, in: body) != nil
+    }
+
+    private static func split(_ line: String) -> (String, String?, String?) {
         guard let prefix = first(glog, in: line), let range = Range(prefix.range, in: line) else {
-            return (String(line.drop(while: \.isWhitespace)), nil)
+            return (String(line.drop(while: \.isWhitespace)), nil, nil)
         }
-        return (String(line[range.upperBound...]), capture(prefix, at: 1, in: line))
+        let rawSource = capture(prefix, at: 2, in: line)
+        let source = rawSource?.split(separator: "/").last.map(String.init)
+        return (String(line[range.upperBound...]), capture(prefix, at: 1, in: line), source)
     }
 
     private static func regex(_ pattern: String, insensitive: Bool = false) -> NSRegularExpression {
@@ -114,10 +161,12 @@ final class LogTail {
     }
 
     private struct Cursor {
-        let owner: String?
+        var owner: String?
         var offset: off_t = 0
         var fragment = Data()
         var discarding = false
+        var ignoringContinuation = false
+        var needsHeaderOwner = false
         var pending: QuotaEvent?
         var retired = false
 
@@ -126,6 +175,8 @@ final class LogTail {
                 offset = 0
                 fragment = Data()
                 discarding = false
+                ignoringContinuation = false
+                needsHeaderOwner = false
                 pending = nil
             }
             guard size > offset else { return [] }
@@ -161,7 +212,7 @@ final class LogTail {
 
     func start(owner: String?) throws {
         try forEachFile { id, fd, size in
-            var cursor = Cursor(owner: owner, offset: size)
+            var cursor = Cursor(owner: owner, offset: size, needsHeaderOwner: size > 0)
             if size > 0 {
                 var last: UInt8 = 0
                 cursor.discarding = pread(fd, &last, 1, size - 1) != 1 || last != 10
@@ -186,6 +237,17 @@ final class LogTail {
             }
             guard var cursor = cursors[id], !cursor.retired else { return }
             let lines = try cursor.read(fd: fd, size: size)
+            if !lines.isEmpty {
+                if cursor.needsHeaderOwner {
+                    cursor.needsHeaderOwner = false
+                    if let headerEmail = Self.readHeaderAuthEmail(fd: fd, limit: min(size, 64 * 1024)) {
+                        cursor.owner = headerEmail
+                    }
+                }
+                if let lineEmail = QuotaParser.authEmail(in: lines) {
+                    cursor.owner = lineEmail
+                }
+            }
             if var pending = cursor.pending {
                 if detect {
                     pending.resetAt = QuotaParser.resetAt(in: QuotaParser.continuation(lines.prefix(6)).joined(separator: "\n"), now: now)
@@ -193,7 +255,8 @@ final class LogTail {
                 }
                 cursor.pending = nil
             }
-            if detect, let event = QuotaParser.event(in: lines, now: now, owner: cursor.owner) {
+            if detect, let event = QuotaParser.event(in: lines, now: now, owner: cursor.owner,
+                                                     ignoringContinuation: &cursor.ignoringContinuation) {
                 if event.resetAt != nil { events.append(event) }
                 else { cursor.pending = event }
             }
@@ -201,6 +264,15 @@ final class LogTail {
         }
         cursors = cursors.filter { visible.contains($0.key) }
         return events
+    }
+
+    private static func readHeaderAuthEmail(fd: Int32, limit: off_t) -> String? {
+        guard limit > 0 else { return nil }
+        var buffer = [UInt8](repeating: 0, count: Int(limit))
+        let count = pread(fd, &buffer, buffer.count, 0)
+        guard count > 0 else { return nil }
+        let text = String(decoding: buffer.prefix(count), as: UTF8.self)
+        return QuotaParser.authEmail(in: text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init))
     }
 
     func retireExisting() {

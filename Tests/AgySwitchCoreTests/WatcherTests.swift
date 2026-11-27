@@ -56,6 +56,93 @@ final class WatcherTests: XCTestCase {
         XCTAssertNil(QuotaParser.resetAt(in: "resetTime=2025-02-31T02:00:00Z", now: 0))
     }
 
+    func testThirdPartyMcpOAuthAndSafetyMonitorLogsDoNotTriggerCooldown() throws {
+        let nonQuotaSamples: [[String]] = [
+            // Exact real log line from cli-20261127_205259.log:L116 that falsely triggered a 5h cooldown
+            [#"W1127 20:53:01.185238      29 mcp_auth.go:885] OAuth setup failed for openmarket: dynamic client registration failed: registration failed with status 429: {"error":"invalid_client_metadata"}"#],
+            // Exact safety monitor summary echoing diagnostic tool text about HTTP 429 errors
+            [#"I1127 21:20:34.940360    1857 runner.go:961] Monitor sir_flash_lite FINISHED: triggered=false, reason="The agent is executing a local python script to inspect HTTP 429 error lines""#],
+            // Multi-line JSON body belonging to an ignored MCP source
+            [
+                "E1127 20:53:01.185238      29 mcp_auth.go:885] OAuth setup failed for openmarket, body: {",
+                #"  "code": 429,"#,
+                #"  "status": "RESOURCE_EXHAUSTED""#,
+                "}"
+            ],
+            // Third-party MCP / browser / plugin HTTP 429 errors
+            ["E1127 20:53:01.000000 10 mcp_manager.go:210] MCP server openmarket returned HTTP 429"],
+            ["E1127 20:53:01.000000 10 browser.go:95] failed to load page: 429 Too Many Requests"],
+            ["W1127 20:53:01.000000 10 rpcs_plugin_auth.go:42] plugin auth failed with status 429"],
+            // Bare Warning-level 429 without any Google/model quota context
+            ["W1127 20:53:01.000000 10 updater.go:42] background request failed with status 429"]
+        ]
+        for lines in nonQuotaSamples {
+            XCTAssertNil(QuotaParser.event(in: lines, now: 1_735_680_000, owner: "one@example.com"),
+                         lines.joined(separator: "\n"))
+        }
+
+        try scenario { logs, clock, keychain, pool, _ in
+            let watcher = try AutoSwitchWatcher(pool: pool, directory: logs, clock: { clock.now },
+                                                monotonic: { clock.uptime })
+            let cliLog = logs.appendingPathComponent("cli-20261127_205259.log")
+            let realMcpLine = #"W1127 20:53:01.185238      29 mcp_auth.go:885] OAuth setup failed for openmarket: dynamic client registration failed: registration failed with status 429: {"error":"invalid_client_metadata"}"#
+            try put(realMcpLine + "\n", at: cliLog)
+            XCTAssertNil(try watcher.poll(cooldown: 18_000))
+            clock.advance(2)
+            XCTAssertNil(try watcher.poll(cooldown: 18_000))
+            XCTAssertEqual(keychain.activeWrites, 0)
+            XCTAssertTrue(try pool.snapshot().registry.accounts.allSatisfy { $0.cooldownUntil == nil })
+        }
+    }
+
+    func testRealAntigravityQuotaErrorsParseExactResetDuration() {
+        let now = 1_735_680_000.0
+        let shortReset = "E1126 20:26:02.382558    3475 errorreport.go:282] agent executor error: generating and executing: transport error (ResourceExhausted, HTTP 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 57m52s.: RESOURCE_EXHAUSTED (code 429): Individual quota reached."
+        let shortEvent = QuotaParser.event(in: [shortReset], now: now, owner: "one@example.com")
+        XCTAssertEqual(shortEvent?.reason, .resource)
+        XCTAssertEqual(shortEvent?.resetAt, now + 57 * 60 + 52)
+
+        let hoursReset = "E1124 19:45:54.839836   13738 errorreport.go:282] agent executor error: generating and executing: transport error (ResourceExhausted, HTTP 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 4h30m34s."
+        let hoursEvent = QuotaParser.event(in: [hoursReset], now: now, owner: "one@example.com")
+        XCTAssertEqual(hoursEvent?.reason, .resource)
+        XCTAssertEqual(hoursEvent?.resetAt, now + 4 * 3600 + 30 * 60 + 34)
+
+        let daysReset = "E1127 21:00:00.000000 10 errorreport.go:282] Individual quota reached. Resets in 5d17h."
+        let daysEvent = QuotaParser.event(in: [daysReset], now: now, owner: "one@example.com")
+        XCTAssertEqual(daysEvent?.reason, .quota)
+        XCTAssertEqual(daysEvent?.resetAt, now + 5 * 86_400 + 17 * 3600)
+
+        let imageLines = [
+            "E1121 18:20:23.219362    3701 generate_image.go:171] error generating image: failed to generate content: 429 Too Many Requests, body: {",
+            #"  "error": {"#,
+            #"    "code": 429,"#,
+            #"    "message": "You have exhausted your capacity on this model. Your quota will reset after 4h58m0s.","#,
+            #"    "status": "RESOURCE_EXHAUSTED""#
+        ]
+        let imageEvent = QuotaParser.event(in: imageLines, now: now, owner: "one@example.com")
+        XCTAssertEqual(imageEvent?.reason, .http429)
+        XCTAssertEqual(imageEvent?.resetAt, now + 4 * 3600 + 58 * 60)
+    }
+
+    func testExistingSessionUsesApplyAuthResultEmailInsteadOfCurrentKeychainAccount() throws {
+        try scenario { logs, clock, keychain, pool, _ in
+            let staleAcp = logs.appendingPathComponent("acp-server-20261127_203000-1000.log")
+            try put("I1127 20:30:00.100000 41 server_oauth.go:221] applyAuthResult: email=one@example.com, authMethod=consumer, quotaProject=\n",
+                    at: staleAcp)
+            // Active Keychain already switched to account two BEFORE the watcher starts.
+            keychain.active = try credential("two@example.com")
+            let watcher = try AutoSwitchWatcher(pool: pool, directory: logs, clock: { clock.now },
+                                                monotonic: { clock.uptime })
+            let quotaLine = "E1127 20:35:00.000000 100 errorreport.go:282] agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 45m0s.\n"
+            try put(quotaLine, at: staleAcp, append: true)
+            XCTAssertNil(try watcher.poll(cooldown: 18_000))
+            clock.advance(2)
+            XCTAssertNil(try watcher.poll(cooldown: 18_000))
+            XCTAssertEqual(keychain.activeWrites, 0)
+            XCTAssertTrue(try pool.snapshot().registry.accounts.allSatisfy { $0.cooldownUntil == nil })
+        }
+    }
+
     func testNewLogsUseSplitResetContextAndRetireAllOldSessionsAfterSwitch() throws {
         try scenario { logs, clock, keychain, pool, entries in
             let oldLog = logs.appendingPathComponent("cli-old.log")

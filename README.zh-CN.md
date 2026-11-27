@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-> **AgySwitch**（`v0.2.5`）是一款专为 **Google Antigravity CLI（`agy`）** 打造的超轻量（**~2.5 MB**）、**100% 零网络请求**的 **macOS 原生菜单栏多账号切换工具**——100% 纯 Swift & SwiftUI 构建，**零第三方依赖**、**不做本地反代或 OAuth 网关**，基于 macOS Keychain 无损快照秒切账号，支持**顶栏 `+` 一键录入新号**、**单击或 `⌘↩` 秒切**、**三端一键联动重载（Antigravity 桌面版 + T3 Code `agy acp` 后端 + 终端 `agy`）**、**纯本地被动日志监听的额度耗尽自动切号**，并内置**简体中文与英文双语界面**（默认跟随系统或菜单内实时切换）。
+> **AgySwitch**（`v0.2.6`）是一款专为 **Google Antigravity CLI（`agy`）** 打造的超轻量（**~2.5 MB**）、**100% 零网络请求**的 **macOS 原生菜单栏多账号切换工具**——100% 纯 Swift & SwiftUI 构建，**零第三方依赖**、**不做本地反代或 OAuth 网关**，基于 macOS Keychain 无损快照秒切账号，支持**顶栏 `+` 一键录入新号**、**单击或 `⌘↩` 秒切**、**三端一键联动重载（Antigravity 桌面版 + T3 Code `agy acp` 后端 + 终端 `agy`）**、**纯本地被动日志监听的额度耗尽自动切号**，并内置**简体中文与英文双语界面**（默认跟随系统或菜单内实时切换）。
 
 **AgySwitch** 常驻 macOS 顶部菜单栏（`⇄`），专为高频使用 `agy` 的开发者设计。无论是趁黑五或优惠活动备两三个 **Google AI Pro** 账号轮换使用、以更低成本用出接近 **Ultra** 的高阶模型额度体验，还是在工作号与个人号之间无缝切换，AgySwitch 都能做到单击或快捷键秒切、额度见底自动轮换——**全程 100% 零联网请求**，不代理任何对话流量、不做后台轮询，也不修改 `agy` 的任何业务配置、MCP、Skills 或对话历史。
 
@@ -35,8 +35,8 @@ curl -fsSL https://raw.githubusercontent.com/wanghao-SunSky/AgySwitch/main/scrip
 
 ### 方式三：手动下载安装包
 
-- 📦 [**下载 DMG 安装包（`AgySwitch-v0.2.5-macos-arm64.dmg`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.5/AgySwitch-v0.2.5-macos-arm64.dmg)
-- 🗂️ [**下载 ZIP 压缩包（`AgySwitch-v0.2.5-macos-arm64.zip`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.5/AgySwitch-v0.2.5-macos-arm64.zip)
+- 📦 [**下载 DMG 安装包（`AgySwitch-v0.2.6-macos-arm64.dmg`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.6/AgySwitch-v0.2.6-macos-arm64.dmg)
+- 🗂️ [**下载 ZIP 压缩包（`AgySwitch-v0.2.6-macos-arm64.zip`）**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.6/AgySwitch-v0.2.6-macos-arm64.zip)
 - 🔗 [**Releases 页面（含 `SHA256SUMS.txt` 校验值）**](https://github.com/wanghao-SunSky/AgySwitch/releases/latest)
 
 **手动下载首次打开说明**：因未购买 Apple 付费开发者证书、采用本地 ad-hoc 签名，通过浏览器手动下载后拖入 `/Applications` 打开时，若 macOS 提示「已损坏」或「无法验证开发者」，运行一行命令移除浏览器隔离属性即可：
@@ -61,7 +61,7 @@ xattr -cr /Applications/AgySwitch.app
 
 重度使用 Google Antigravity CLI（`agy`）的高阶模型时，单个账号的 5 小时或周配额窗口往往很快见底。不少开发者会趁黑五或促销活动备两三个 **Google AI Pro** 账号轮换使用，用远低于单买 Ultra 的成本获得接近 Ultra 的可用额度上限。**AgySwitch** 与常见切号方案的核心区别如下：
 
-| 对比维度 | **AgySwitch（`v0.2.5`）** | 本地反代 / OAuth 网关类工具 | 官方手动 `/logout` 重登 |
+| 对比维度 | **AgySwitch（`v0.2.6`）** | 本地反代 / OAuth 网关类工具 | 官方手动 `/logout` 重登 |
 | :--- | :--- | :--- | :--- |
 | **对话流量链路** | **100% 官方原版 `agy` 直连** | 第三方网关代理转发 | 官方原版 `agy` 直连 |
 | **网络请求行为** | **100% 零网络请求**（纯本地 Keychain 快照与只读日志文件操作） | 持续后台轮询 + 代理转发对话请求 | 无 |

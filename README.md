@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-> **AgySwitch** (`v0.2.5`) is an ultra-lightweight (**~2.5 MB**), **100% zero-network** native macOS menu bar app built with pure Swift & SwiftUI for switching multiple **Google Antigravity CLI (`agy`)** accounts via lossless macOS Keychain snapshots—featuring **one-click account capture (`+`)**, **instant single-click or `⌘↩` switching**, **one-click tri-client reload** (`Antigravity.app` + T3 Code `agy acp` + terminal `agy`), **automatic quota-exhaustion switching** via passive local log monitoring, **zero third-party dependencies**, **no proxy or OAuth gateway**, and a **built-in English & Simplified Chinese UI** (system-following or instant in-menu switch).
+> **AgySwitch** (`v0.2.6`) is an ultra-lightweight (**~2.5 MB**), **100% zero-network** native macOS menu bar app built with pure Swift & SwiftUI for switching multiple **Google Antigravity CLI (`agy`)** accounts via lossless macOS Keychain snapshots—featuring **one-click account capture (`+`)**, **instant single-click or `⌘↩` switching**, **one-click tri-client reload** (`Antigravity.app` + T3 Code `agy acp` + terminal `agy`), **automatic quota-exhaustion switching** via passive local log monitoring, **zero third-party dependencies**, **no proxy or OAuth gateway**, and a **built-in English & Simplified Chinese UI** (system-following or instant in-menu switch).
 
 **AgySwitch** sits quietly in your macOS menu bar (`⇄`) and makes multi-account `agy` workflows effortless. Whether you rotate two or three **Google AI Pro** accounts (especially during Black Friday or promotional pricing) to achieve near-**Ultra** effective quota capacity, or separate work and personal subscriptions, AgySwitch captures and switches local Keychain credentials in a single click or shortcut and automatically rotates to the next available account when a session hits a rate limit—with **zero outbound network requests**, no proxy gateway, no background polling, and zero changes to your `agy` settings, MCP servers, skills, or conversation history.
 
@@ -35,8 +35,8 @@ Present a concise security audit report with file and line references and wait f
 
 ### Option 3: Manual Download
 
-- 📦 [**Download DMG Installer (`AgySwitch-v0.2.5-macos-arm64.dmg`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.5/AgySwitch-v0.2.5-macos-arm64.dmg)
-- 🗂️ [**Download ZIP Archive (`AgySwitch-v0.2.5-macos-arm64.zip`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.5/AgySwitch-v0.2.5-macos-arm64.zip)
+- 📦 [**Download DMG Installer (`AgySwitch-v0.2.6-macos-arm64.dmg`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.6/AgySwitch-v0.2.6-macos-arm64.dmg)
+- 🗂️ [**Download ZIP Archive (`AgySwitch-v0.2.6-macos-arm64.zip`)**](https://github.com/wanghao-SunSky/AgySwitch/releases/download/v0.2.6/AgySwitch-v0.2.6-macos-arm64.zip)
 - 🔗 [**GitHub Releases & `SHA256SUMS.txt`**](https://github.com/wanghao-SunSky/AgySwitch/releases/latest)
 
 **First Launch Note (Manual Browser Downloads Only)**: Because AgySwitch is distributed with local ad-hoc signing rather than a paid Apple Developer ID certificate, macOS Gatekeeper may quarantine archives downloaded via a web browser. If macOS says the app is "damaged" or "cannot be verified" after dragging it to `/Applications`, clear the browser quarantine attribute once:
@@ -61,7 +61,7 @@ xattr -cr /Applications/AgySwitch.app
 
 Heavy daily usage of frontier models in Google Antigravity CLI (`agy`) quickly exhausts a single account's 5-hour or weekly quota window. Many developers pair two or three **Google AI Pro** accounts (especially when promotional or Black Friday discounts make multi-Pro setups much more cost-effective than a single Ultra tier) and rotate them across coding sessions. Here is how **AgySwitch** compares to local proxy gateways and manual `/logout` rotation:
 
-| Dimension | **AgySwitch (`v0.2.5`)** | Local Proxy / OAuth Gateway Tools | Manual `/logout` & Re-login |
+| Dimension | **AgySwitch (`v0.2.6`)** | Local Proxy / OAuth Gateway Tools | Manual `/logout` & Re-login |
 | :--- | :--- | :--- | :--- |
 | **Traffic Path** | **100% stock `agy` direct connection** | Routed through a local proxy / custom gateway | Stock `agy` direct connection |
 | **Network Activity** | **100% zero network requests** (pure local Keychain & read-only log file operations) | Continuous background polling & token proxying | None |
